@@ -50,8 +50,8 @@ const handles = new Map<string, { origin: string; token: string | null; methods:
 let callback: ReturnType<typeof Bun.serve>;
 
 beforeAll(async () => {
-  tracker = startFakeYouTrack('demo');
-  fallbackTracker = startFakeYouTrack('demo', { emptyProjectFields: true });
+  tracker = startFakeYouTrack();
+  fallbackTracker = startFakeYouTrack({ emptyProjectFields: true });
   callback = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
@@ -374,6 +374,17 @@ describe('YouTrack tracker provider', () => {
     expect(back.selected).toEqual(['p-proj']);
     expect(back.needsLoad).toBe(false);
 
+    // An unreadable store is `unknown`, not disconnected: keep the cache.
+    writeFileSync(accountPath, '{ not json');
+    const unknown = await (await serviceRequest('/projects')).json() as {
+      connected: boolean;
+      projects: Array<{ id: string }>;
+    };
+    expect(unknown.connected).toBe(true);
+    expect(unknown.projects.map((project) => project.id)).toEqual(
+      expect.arrayContaining(['p-proj', 'p-ops']),
+    );
+
     rmSync(accountPath, { force: true });
     const reset = await serviceRequest('/projects', {
       method: 'PUT',
@@ -510,6 +521,10 @@ describe('YouTrack tracker provider', () => {
       },
     ]);
     expect(item && 'provider' in item).toBe(false);
+
+    // A pasted database id resolves to the same issue as the readable key.
+    const byId = await read('items.get', { id: '2-1' });
+    expect(byId.item?.identifier).toBe('PROJ-1');
   });
 
   test('returns null for an unknown item', async () => {
@@ -535,6 +550,10 @@ describe('YouTrack tracker provider', () => {
       body: '[OpenChamber session completed](https://example.com/?session=abc)',
     });
     expect(result.comment).toEqual({ id: 'c-11' });
+
+    const reread = await read('items.get', { id: 'PROJ-1' });
+    expect(reread.item?.comments?.at(-1)?.body)
+      .toBe('[OpenChamber session completed](https://example.com/?session=abc)');
   });
 
   test('a write through a read handle is refused and surfaces as an error', async () => {
@@ -545,5 +564,191 @@ describe('YouTrack tracker provider', () => {
       methods: READ_ONLY,
     });
     expect(refused).toMatchObject({ ok: false, error: { status: 403, code: 'METHOD_NOT_ALLOWED' } });
+  });
+
+  test('recognises only a YouTrack config at the probe', async () => {
+    const notYoutrack = startFakeYouTrack({ config: { body: JSON.stringify({ name: 'not youtrack' }) } });
+    const notJson = startFakeYouTrack({ config: { body: '<html>not json</html>' } });
+    const failing = startFakeYouTrack({ config: { status: 500, body: '{}' } });
+
+    try {
+      expect(await call('auth.probe', { token: null, origin: notYoutrack.origin })).toMatchObject({
+        ok: true,
+        data: { supported: false, message: expect.stringContaining('does not look like a YouTrack server') },
+      });
+      expect(await call('auth.probe', { token: null, origin: notJson.origin })).toMatchObject({
+        ok: true,
+        data: { supported: false, message: expect.stringContaining('did not answer with JSON') },
+      });
+      expect(await call('auth.probe', { token: null, origin: failing.origin })).toMatchObject({
+        ok: true,
+        data: { supported: false, message: expect.stringContaining('answered 500 to /api/config') },
+      });
+    } finally {
+      await Promise.all([notYoutrack.close(), notJson.close(), failing.close()]);
+    }
+  });
+
+  test('pages a long item list with the cursor', async () => {
+    const paged = startFakeYouTrack({ generatedIssues: 45 });
+    try {
+      const first = await read('items.list', LIST, paged.origin);
+      expect(first.items).toHaveLength(40);
+      expect(first.hasMore).toBe(true);
+      expect(first.cursor).toBe('40');
+
+      const cursor = first.cursor ?? '0';
+      const second = await read('items.list', { ...LIST, cursor }, paged.origin);
+      expect(second.items).toHaveLength(8);
+      expect(second.hasMore).toBe(false);
+      expect(second.cursor).toBeNull();
+
+      const seen = new Set(first.items.map((item) => item.id));
+      expect(second.items.every((item) => !seen.has(item.id))).toBe(true);
+    } finally {
+      await paged.close();
+    }
+  });
+
+  test('filters by assignee and reporter', async () => {
+    const people = startFakeYouTrack({
+      extraIssues: [{
+        identifier: 'PROJ-10',
+        summary: 'Alex owns this',
+        state: 'Open',
+        assignee: { login: 'alex', fullName: 'Alex Doe' },
+        reporter: { login: 'alex', fullName: 'Alex Doe' },
+      }],
+    });
+    try {
+      const mine = await read('items.list', { ...LIST, people: 'me' }, people.origin);
+      expect(mine.items.map((item) => item.identifier)).toEqual(['PROJ-1', 'PROJ-2', 'OPS-1']);
+
+      const created = await read('items.list', { ...LIST, people: 'created' }, people.origin);
+      expect(created.items.map((item) => item.identifier)).toEqual(['PROJ-1', 'PROJ-2', 'OPS-1']);
+
+      const any = await read('items.list', { ...LIST, people: 'any' }, people.origin);
+      expect(any.items.map((item) => item.identifier)).toEqual(['PROJ-1', 'PROJ-2', 'OPS-1', 'PROJ-10']);
+    } finally {
+      await people.close();
+    }
+  });
+
+  test('maps every priority level to its project names', async () => {
+    const all = { ...LIST, state: 'all' };
+    expect((await read('items.list', { ...all, priority: 'high' })).items).toEqual([]);
+    expect((await read('items.list', { ...all, priority: 'medium' })).items.map((item) => item.identifier))
+      .toEqual(['PROJ-2']);
+    expect((await read('items.list', { ...all, priority: 'low' })).items.map((item) => item.identifier))
+      .toEqual(['PROJ-3']);
+    expect((await read('items.list', { ...all, priority: 'none' })).items).toHaveLength(4);
+    // A category with no state in the project falls back to unresolved.
+    expect(
+      (await read('items.list', { ...LIST, state: 'triage', containerId: 'p-proj' })).items
+        .map((item) => item.identifier),
+    ).toEqual(['PROJ-1', 'PROJ-2']);
+  });
+
+  test('refuses an unknown project id instead of listing the wrong project', async () => {
+    const refused = await call('items.list', {
+      token: 'demo',
+      account: ACCOUNT,
+      input: { ...LIST, containerId: 'p-nope' },
+    });
+    expect(refused).toMatchObject({
+      ok: false,
+      error: { status: 404, message: expect.stringContaining('Unknown YouTrack project p-nope') },
+    });
+  });
+
+  test('answers null for a comment on an unknown issue', async () => {
+    expect(await read('comments.create', { identifier: 'PROJ-404', body: 'nothing to attach to' }))
+      .toEqual({ comment: null });
+  });
+
+  test('writes the state through the command API when a workflow ignores the field write', async () => {
+    const workflow = startFakeYouTrack({ ignoreDirectStateWrite: true });
+    try {
+      const updated = await read(
+        'items.updateState',
+        { id: 'PROJ-1', stateId: 'In Progress' },
+        workflow.origin,
+      );
+      expect(updated.item?.state).toMatchObject({ name: 'In Progress', category: 'in-progress' });
+      // The fallback runs through the workflow engine, bracing the spaced name.
+      expect(workflow.commandQueries).toEqual(['State {In Progress}']);
+    } finally {
+      await workflow.close();
+    }
+  });
+
+  test('falls back to observed states when project fields are forbidden', async () => {
+    const forbidden = startFakeYouTrack({ projectFieldsStatus: 403 });
+    try {
+      const { states } = await read('states.list', { containerId: 'p-proj' }, forbidden.origin);
+      expect(states.map((state) => [state.name, state.category])).toEqual([
+        ['Open', 'todo'],
+        ['In Progress', 'in-progress'],
+        ['Fixed', 'done'],
+      ]);
+    } finally {
+      await forbidden.close();
+    }
+  });
+
+  test('infers access from the project team and the leader', async () => {
+    const access = startFakeYouTrack({ withTeamlessProject: true, everyoneGroup: true });
+    try {
+      // The account store can name a different instance; clear it so this
+      // fresh origin is the one the panel answers about.
+      rmSync(join(home, '.config', 'openchamber', 'tracker-accounts.json'), { force: true });
+
+      await read('auth.verify', {}, access.origin);
+      const panel = await (await serviceRequest('/projects')).json() as {
+        instance: string | null;
+        projects: Array<{ id: string; access: string }>;
+      };
+      expect(panel.instance).toBe(access.origin);
+      const accessOf = (id: string) => panel.projects.find((project) => project.id === id)?.access;
+      expect(accessOf('p-proj')).toBe('edit'); // leader
+      expect(accessOf('p-ops')).toBe('edit'); // the everyone group
+      expect(accessOf('p-mystery')).toBe('unknown'); // no team data
+    } finally {
+      // Leave the tracker origin as the panel's last instance again.
+      await read('containers.list', {});
+      await access.close();
+    }
+  });
+
+  test('verifies the account even when the project preload fails', async () => {
+    const offline = startFakeYouTrack({ projectsStatus: 500 });
+    try {
+      const verified = await read('auth.verify', {}, offline.origin);
+      expect(verified.account).toMatchObject({ id: 'u-1', login: 'mona' });
+    } finally {
+      await offline.close();
+    }
+  });
+
+  test('refuses an unauthenticated or malformed service request', async () => {
+    const serviceUrl = `http://127.0.0.1:${servicePort}`;
+
+    expect((await fetch(`${serviceUrl}/health`)).status).toBe(401);
+    expect(await fetch(`${serviceUrl}/health`, {
+      headers: { authorization: `Bearer ${serviceToken}` },
+    }).then((response) => response.status)).toBe(200);
+    expect((await fetch(`${serviceUrl}/projects`, {
+      headers: { authorization: 'Bearer not-the-service-token' },
+    })).status).toBe(401);
+
+    // Not a selection body, so nothing is stored.
+    expect((await serviceRequest('/projects', { method: 'PUT', body: '{' })).status).toBe(400);
+    expect((await serviceRequest('/projects', { method: 'POST', body: '{}' })).status).toBe(405);
+    expect((await serviceRequest(TRACKER_PROVIDER_PATH, {
+      method: 'POST',
+      body: JSON.stringify({ v: 1 }),
+    })).status).toBe(400);
+    expect((await serviceRequest(TRACKER_PROVIDER_PATH, { method: 'GET' })).status).toBe(404);
+    expect((await serviceRequest('/not-a-route')).status).toBe(404);
   });
 });

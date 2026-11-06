@@ -1,5 +1,17 @@
 import { connectHost } from "@openchamber/sdk";
 import { applyHostReady } from "@openchamber/sdk/ui";
+import {
+  checkedFrom,
+  groupProjects,
+  isDirty,
+  matchesSearch,
+  searchTermOf,
+  summaryText,
+  type PanelMode,
+  type Project,
+  type ProjectAccess,
+  type ProjectsAnswer,
+} from "./projects.ts";
 
 const host = connectHost();
 const root = document.querySelector<HTMLDivElement>("#root");
@@ -7,21 +19,6 @@ const root = document.querySelector<HTMLDivElement>("#root");
 if (!root) {
   throw new Error("panel root element is missing");
 }
-
-type PanelMode = "all" | "selected";
-type ProjectAccess = "edit" | "read" | "unknown";
-type Project = { id: string; key: string | null; name: string; access: ProjectAccess };
-type ProjectsAnswer = {
-  connected: boolean;
-  instance: string | null;
-  projects: Project[];
-  mode: PanelMode;
-  selected: string[];
-  user: { id: string; login: string | null } | null;
-  needsLoad: boolean;
-};
-
-const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
 let mounted = false;
 let loading = false;
@@ -43,18 +40,6 @@ const describe = (cause: unknown): string => {
   return "The YouTrack service did not answer.";
 };
 
-const projectIds = (): string[] => state?.projects.map((project) => project.id) ?? [];
-
-const sameList = (left: string[], right: string[]): boolean => {
-  if (left.length !== right.length) return false;
-  const chosen = new Set(left);
-  return right.every((id) => chosen.has(id));
-};
-
-// Keep the boxes in sync with the saved project selection, independently of
-// whether the board currently shows all projects or only the selected ones.
-const checkedFrom = (answer: ProjectsAnswer): Set<string> => new Set(answer.selected);
-
 const readAnswer = <T>(response: { status: number; body: string }): T => {
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`The YouTrack service answered ${response.status}.`);
@@ -62,45 +47,16 @@ const readAnswer = <T>(response: { status: number; body: string }): T => {
   return JSON.parse(response.body) as T;
 };
 
-const searchTerm = (): string => search.trim().toLocaleLowerCase();
+const searchTerm = (): string => searchTermOf(search);
 
-const matchesSearch = (project: Project): boolean => {
-  const term = searchTerm();
-  if (!term) return true;
-  return (
-    project.name.toLocaleLowerCase().includes(term)
-    || (project.key ?? "").toLocaleLowerCase().includes(term)
-  );
-};
+const visibleProjects = (): Project[] =>
+  state?.projects.filter((project) => matchesSearch(project, searchTerm())) ?? [];
 
-const visibleProjects = (): Project[] => state?.projects.filter(matchesSearch) ?? [];
-
-const sortByName = (projects: Project[]): Project[] =>
-  [...projects].sort(
-    (left, right) =>
-      collator.compare(left.name, right.name) || collator.compare(left.key ?? "", right.key ?? ""),
-  );
-
-const groupedProjects = (): Array<{ access: ProjectAccess; label: string; projects: Project[] }> => {
-  const allUnknown = state?.projects.every((project) => project.access === "unknown") ?? false;
-  return (["edit", "read", "unknown"] as const).flatMap((access) => {
-    const projects = sortByName(visibleProjects().filter((project) => project.access === access));
-    if (projects.length === 0) return [];
-    const label =
-      access === "edit"
-        ? "Can edit"
-        : access === "read"
-          ? "Read only"
-          : allUnknown
-            ? "Projects"
-            : "Access unknown";
-    return [{ access, label, projects }];
-  });
-};
+const groupedProjects = () => groupProjects(state?.projects ?? [], searchTerm());
 
 const dirty = (): boolean => {
   if (!state) return false;
-  return !sameList([...draft], state.selected);
+  return isDirty(draft, state.selected);
 };
 
 const updateMeta = (): void => {
@@ -108,17 +64,7 @@ const updateMeta = (): void => {
   const all = state.projects.length;
   const visible = visibleProjects().length;
 
-  let text: string;
-  if (state.mode === "all") {
-    text = `All ${all} projects included`;
-  } else if (draft.size === 0) {
-    text = "Pick at least one project";
-  } else if (draft.size === all) {
-    text = `All ${all} projects selected`;
-  } else {
-    text = `${draft.size} of ${all} selected`;
-  }
-  countEl.textContent = text;
+  countEl.textContent = summaryText(state.mode, all, draft.size);
 
   const changed = dirty();
   if (unsavedEl) unsavedEl.hidden = !changed;

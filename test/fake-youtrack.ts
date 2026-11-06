@@ -4,6 +4,9 @@
  * It implements only the endpoints the provider calls, with just enough of
  * YouTrack's search syntax to exercise the query builder. It is not a YouTrack
  * emulator: it exists so the nine provider calls can be run end to end.
+ *
+ * Each instance keeps its own copy of the issues, so one test's state change
+ * or comment does not leak into another instance.
  */
 
 export type FakeState = { id: string; name: string; isResolved: boolean; position: number };
@@ -26,13 +29,47 @@ export type FakeIssue = {
   comments: Array<{ id: string; text: string; created: number; author: { login: string; fullName: string } | null }>;
 };
 
-type Project = {
+export type FakeProject = {
   id: string;
   name: string;
   shortName: string;
   states: FakeState[];
   leader?: { id: string; login: string };
   team?: { users: Array<{ id: string; login: string }>; allUsersGroup: boolean };
+};
+
+/** One extra issue, described the way a test thinks about it. */
+export type FakeIssueSpec = {
+  identifier: string;
+  summary?: string;
+  description?: string;
+  state?: string;
+  priority?: string;
+  project?: 'p-proj' | 'p-ops';
+  assignee?: { login: string; fullName: string } | null;
+  reporter?: { login: string; fullName: string } | null;
+};
+
+export type FakeYouTrackOptions = {
+  token?: string;
+  /** The project-fields endpoint answers an empty list. */
+  emptyProjectFields?: boolean;
+  /** The project-fields endpoint answers this status instead. */
+  projectFieldsStatus?: number;
+  /** The direct custom-field write succeeds but does not change the state. */
+  ignoreDirectStateWrite?: boolean;
+  /** Issues appended after the default four. */
+  extraIssues?: FakeIssueSpec[];
+  /** `GENERATED-n` issues in PROJ, for paging. */
+  generatedIssues?: number;
+  /** Override `/api/config`, the probe's answer. */
+  config?: { status?: number; body: string };
+  /** The project-list endpoint answers this status instead. */
+  projectsStatus?: number;
+  /** Add a project with no team data, so its access is unknown. */
+  withTeamlessProject?: boolean;
+  /** Make OPS visible to everyone, so the account can edit it. */
+  everyoneGroup?: boolean;
 };
 
 const STATES: FakeState[] = [
@@ -80,25 +117,36 @@ const makeIssue = (
   ...options,
 });
 
-const PROJECTS: Project[] = [
-  {
-    id: 'p-proj',
-    name: 'Probe Project',
-    shortName: 'PROJ',
-    states: STATES.map(clone),
-    leader: { id: 'u-1', login: 'mona' },
-    team: { users: [{ id: 'u-1', login: 'mona' }], allUsersGroup: false },
-  },
-  {
-    id: 'p-ops',
-    name: 'Operations',
-    shortName: 'OPS',
-    states: STATES.map(clone),
-    team: { users: [{ id: 'u-2', login: 'alex' }], allUsersGroup: false },
-  },
-];
+const baseProjects = (options: FakeYouTrackOptions): FakeProject[] => {
+  const projects: FakeProject[] = [
+    {
+      id: 'p-proj',
+      name: 'Probe Project',
+      shortName: 'PROJ',
+      states: STATES.map(clone),
+      leader: { id: 'u-1', login: 'mona' },
+      team: { users: [{ id: 'u-1', login: 'mona' }], allUsersGroup: false },
+    },
+    {
+      id: 'p-ops',
+      name: 'Operations',
+      shortName: 'OPS',
+      states: STATES.map(clone),
+      team: { users: [{ id: 'u-2', login: 'alex' }], allUsersGroup: options.everyoneGroup === true },
+    },
+  ];
+  if (options.withTeamlessProject) {
+    projects.push({
+      id: 'p-mystery',
+      name: 'Mystery Project',
+      shortName: 'MYST',
+      states: STATES.map(clone),
+    });
+  }
+  return projects;
+};
 
-const ISSUES: FakeIssue[] = [
+const baseIssues = (): FakeIssue[] => [
   makeIssue(
     '2-1',
     'PROJ-1',
@@ -126,92 +174,157 @@ const ISSUES: FakeIssue[] = [
   }),
 ];
 
-const findIssue = (idOrKey: string): FakeIssue | undefined => ISSUES.find(
-  (issue) => issue.id === idOrKey || issue.idReadable.toLowerCase() === idOrKey.toLowerCase(),
+const issueFromSpec = (spec: FakeIssueSpec, index: number): FakeIssue => {
+  const assignee = spec.assignee === undefined
+    ? undefined
+    : spec.assignee === null
+      ? null
+      : { ...spec.assignee, avatarUrl: `/hub/api/rest/avatar/${spec.assignee.login}?s=48` };
+  const reporter = spec.reporter === undefined ? undefined : spec.reporter;
+  return makeIssue(
+    `extra-${index + 1}`,
+    spec.identifier,
+    spec.summary ?? `Issue ${spec.identifier}`,
+    spec.description ?? '',
+    spec.state ?? 'Open',
+    spec.priority ?? 'Normal',
+    {
+      ...(spec.project ? { projectId: spec.project } : {}),
+      ...(assignee !== undefined ? { assignee } : {}),
+      ...(reporter !== undefined ? { reporter } : {}),
+    },
+  );
+};
+
+const generatedIssue = (index: number): FakeIssue => makeIssue(
+  `generated-${index}`,
+  `GEN-${index}`,
+  `Generated issue ${index}`,
+  'One of many, for paging.',
+  'Open',
+  'Normal',
+  { projectId: 'p-proj' },
 );
-
-/** One `key: value` clause of a YouTrack search string, up to the next `and`. */
-const clause = (query: string, key: string): string | null => {
-  const atStart = new RegExp(`^${key}:\\s*(.*?)(?=\\s+and\\s+|$)`, 'i');
-  const afterAnd = new RegExp(`\\s+and\\s+${key}:\\s*(.*?)(?=\\s+and\\s+|$)`, 'i');
-  return query.match(atStart)?.[1] ?? query.match(afterAnd)?.[1] ?? null;
-};
-
-const namesOf = (value: string): string[] => value
-  .split(',')
-  .map((part) => part.trim().replace(/^\{/, '').replace(/\}$/, ''))
-  .filter(Boolean);
-
-const matchesQuery = (issue: FakeIssue, raw: string | null): boolean => {
-  if (!raw) return true;
-  const query = raw.trim();
-  if (!query) return true;
-
-  if (query.includes('#Resolved') && issue.resolved === null) return false;
-  if (query.includes('#Unresolved') && issue.resolved !== null) return false;
-
-  const projectClause = clause(query, 'project');
-  if (projectClause) {
-    const project = PROJECTS.find((entry) => entry.id === issue.projectId);
-    const names = namesOf(projectClause);
-    if (!project || !names.some((name) => name === project.shortName || name === project.name)) return false;
-  }
-
-  const stateClause = clause(query, 'State');
-  if (stateClause && !namesOf(stateClause).includes(issue.state.name)) return false;
-
-  const priorityClause = clause(query, 'Priority');
-  if (priorityClause && !namesOf(priorityClause).includes(issue.priority)) return false;
-
-  if (query.includes('for: me') && issue.assignee?.login !== 'mona') return false;
-  if (query.includes('created by: me') && issue.reporter?.login !== 'mona') return false;
-
-  let rest = query;
-  for (const key of ['project', 'State', 'Priority', 'for', 'created by']) {
-    rest = rest.replace(new RegExp(`(?:^|\\s+and\\s+)${key}:\\s*.*?(?=\\s+and\\s+|$)`, 'gi'), '');
-  }
-  rest = rest.replace(/\band\b/gi, ' ').replace(/#\w+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (rest && !`${issue.summary} ${issue.description}`.toLowerCase().includes(rest.toLowerCase())) return false;
-
-  return true;
-};
-
-const fieldsFor = (issue: FakeIssue) => ({
-  id: issue.id,
-  idReadable: issue.idReadable,
-  summary: issue.summary,
-  description: issue.description,
-  created: issue.created,
-  updated: issue.updated,
-  resolved: issue.resolved,
-  project: PROJECTS.find((project) => project.id === issue.projectId) ?? null,
-  tags: issue.tags,
-  customFields: [
-    { name: 'State', value: { id: issue.state.id, name: issue.state.name, isResolved: issue.state.isResolved } },
-    { name: 'Priority', value: { id: issue.priority.toLowerCase(), name: issue.priority } },
-    ...(issue.type
-      ? [{ name: 'Type', value: { id: issue.type.toLowerCase(), name: issue.type } }]
-      : []),
-    ...(issue.assignee
-      ? [{ name: 'Assignee', value: { id: issue.assignee.login, name: issue.assignee.fullName, login: issue.assignee.login, avatarUrl: issue.assignee.avatarUrl } }]
-      : []),
-  ],
-  comments: issue.comments.map((comment) => ({
-    id: comment.id,
-    text: comment.text,
-    created: comment.created,
-    author: comment.author ? { id: comment.author.login, login: comment.author.login, name: comment.author.fullName } : null,
-  })),
-});
 
 const json = (body: unknown, status = 200): Response => Response.json(body, { status });
 
-export type FakeYouTrack = { origin: string; close: () => Promise<void>; issues: FakeIssue[] };
+export type FakeYouTrack = {
+  origin: string;
+  close: () => Promise<void>;
+  issues: FakeIssue[];
+  projects: FakeProject[];
+  /** Every query string the provider sent to the command API. */
+  commandQueries: string[];
+};
 
-export const startFakeYouTrack = (
-  token = 'demo',
-  options: { emptyProjectFields?: boolean } = {},
-): FakeYouTrack => {
+export const startFakeYouTrack = (options: FakeYouTrackOptions = {}): FakeYouTrack => {
+  const token = options.token ?? 'demo';
+  const projects = baseProjects(options);
+  const issues = [
+    ...baseIssues(),
+    ...(options.extraIssues ?? []).map(issueFromSpec),
+    ...Array.from({ length: options.generatedIssues ?? 0 }, (_, index) => generatedIssue(index + 1)),
+  ];
+  const commandQueries: string[] = [];
+
+  const findIssue = (idOrKey: string): FakeIssue | undefined => issues.find(
+    (issue) => issue.id === idOrKey || issue.idReadable.toLowerCase() === idOrKey.toLowerCase(),
+  );
+
+  /** One `key: value` clause of a YouTrack search string, up to the next `and`. */
+  const clause = (query: string, key: string): string | null => {
+    const atStart = new RegExp(`^${key}:\\s*(.*?)(?=\\s+and\\s+|$)`, 'i');
+    const afterAnd = new RegExp(`\\s+and\\s+${key}:\\s*(.*?)(?=\\s+and\\s+|$)`, 'i');
+    return query.match(atStart)?.[1] ?? query.match(afterAnd)?.[1] ?? null;
+  };
+
+  const namesOf = (value: string): string[] => value
+    .split(',')
+    .map((part) => part.trim().replace(/^\{/, '').replace(/\}$/, ''))
+    .filter(Boolean);
+
+  const matchesQuery = (issue: FakeIssue, raw: string | null): boolean => {
+    if (!raw) return true;
+    const query = raw.trim();
+    if (!query) return true;
+
+    if (query.includes('#Resolved') && issue.resolved === null) return false;
+    if (query.includes('#Unresolved') && issue.resolved !== null) return false;
+
+    const projectClause = clause(query, 'project');
+    if (projectClause) {
+      const project = projects.find((entry) => entry.id === issue.projectId);
+      const names = namesOf(projectClause);
+      if (!project || !names.some((name) => name === project.shortName || name === project.name)) return false;
+    }
+
+    const stateClause = clause(query, 'State');
+    if (stateClause && !namesOf(stateClause).includes(issue.state.name)) return false;
+
+    const priorityClause = clause(query, 'Priority');
+    if (priorityClause && !namesOf(priorityClause).includes(issue.priority)) return false;
+
+    if (query.includes('for: me') && issue.assignee?.login !== 'mona') return false;
+    if (query.includes('created by: me') && issue.reporter?.login !== 'mona') return false;
+
+    let rest = query;
+    for (const key of ['project', 'State', 'Priority', 'for', 'created by']) {
+      rest = rest.replace(new RegExp(`(?:^|\\s+and\\s+)${key}:\\s*.*?(?=\\s+and\\s+|$)`, 'gi'), '');
+    }
+    rest = rest.replace(/\band\b/gi, ' ').replace(/#\w+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (rest && !`${issue.summary} ${issue.description}`.toLowerCase().includes(rest.toLowerCase())) return false;
+
+    return true;
+  };
+
+  const fieldsFor = (issue: FakeIssue) => ({
+    id: issue.id,
+    idReadable: issue.idReadable,
+    summary: issue.summary,
+    description: issue.description,
+    created: issue.created,
+    updated: issue.updated,
+    resolved: issue.resolved,
+    project: projects.find((project) => project.id === issue.projectId) ?? null,
+    tags: issue.tags,
+    customFields: [
+      { name: 'State', value: { id: issue.state.id, name: issue.state.name, isResolved: issue.state.isResolved } },
+      { name: 'Priority', value: { id: issue.priority.toLowerCase(), name: issue.priority } },
+      ...(issue.type
+        ? [{ name: 'Type', value: { id: issue.type.toLowerCase(), name: issue.type } }]
+        : []),
+      ...(issue.assignee
+        ? [{ name: 'Assignee', value: { id: issue.assignee.login, name: issue.assignee.fullName, login: issue.assignee.login, avatarUrl: issue.assignee.avatarUrl } }]
+        : []),
+    ],
+    comments: issue.comments.map((comment) => ({
+      id: comment.id,
+      text: comment.text,
+      created: comment.created,
+      author: comment.author ? { id: comment.author.login, login: comment.author.login, name: comment.author.fullName } : null,
+    })),
+  });
+
+  /** Apply `State {In Progress}` the way the command API's workflow engine would. */
+  const applyCommand = (query: string, targets: Array<{ idReadable?: string; id?: string }>): void => {
+    commandQueries.push(query);
+    const command = /^(\S+)\s+(.+)$/.exec(query.trim());
+    if (!command) return;
+    const fieldName = command[1] ?? '';
+    const rawValue = (command[2] ?? '').trim();
+    const value = rawValue.replace(/^\{/, '').replace(/\}$/, '');
+    if (fieldName.toLowerCase() !== 'state') return;
+    for (const target of targets) {
+      const issue = findIssue(target.idReadable ?? target.id ?? '');
+      if (!issue) continue;
+      const next = STATES.find((entry) => entry.name === value);
+      if (!next) continue;
+      issue.state = clone(next);
+      issue.resolved = next.isResolved ? Date.now() : null;
+      issue.updated = Date.now();
+    }
+  };
+
   const server = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
@@ -220,6 +333,12 @@ export const startFakeYouTrack = (
 
       // The probe runs without a credential.
       if (url.pathname === '/api/config' && request.method === 'GET') {
+        if (options.config) {
+          return new Response(options.config.body, {
+            status: options.config.status ?? 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
         return json({ version: '2024.3.0' });
       }
 
@@ -232,15 +351,17 @@ export const startFakeYouTrack = (
       }
 
       if (url.pathname === '/api/admin/projects' && request.method === 'GET') {
+        if (options.projectsStatus) return json({ error: 'server error' }, options.projectsStatus);
         return json(
-          PROJECTS.map(({ id, name, shortName, leader, team }) => ({ id, name, shortName, leader, team })),
+          projects.map(({ id, name, shortName, leader, team }) => ({ id, name, shortName, leader, team })),
         );
       }
 
       const projectFields = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)\/customFields$/);
       if (projectFields && request.method === 'GET') {
-        const project = PROJECTS.find((entry) => entry.id === projectFields[1]);
+        const project = projects.find((entry) => entry.id === projectFields[1]);
         if (!project) return json({ error: 'Not found' }, 404);
+        if (options.projectFieldsStatus) return json({ error: 'Forbidden' }, options.projectFieldsStatus);
         if (options.emptyProjectFields) return json([]);
         return json([
           {
@@ -255,13 +376,18 @@ export const startFakeYouTrack = (
       }
 
       if (url.pathname === '/api/issues' && request.method === 'GET') {
-        const matching = ISSUES.filter((issue) => matchesQuery(issue, url.searchParams.get('query')));
+        const matching = issues.filter((issue) => matchesQuery(issue, url.searchParams.get('query')));
         const skip = Number(url.searchParams.get('$skip') ?? '0') || 0;
         const top = Number(url.searchParams.get('$top') ?? '40') || 40;
         return json(matching.slice(skip, skip + top).map(fieldsFor));
       }
 
       if (url.pathname === '/api/commands' && request.method === 'POST') {
+        const body = (await request.json()) as {
+          query?: string;
+          issues?: Array<{ idReadable?: string; id?: string }>;
+        };
+        applyCommand(body.query ?? '', body.issues ?? []);
         return json({ id: 'cmd-1' });
       }
 
@@ -289,6 +415,7 @@ export const startFakeYouTrack = (
 
         if (request.method === 'POST') {
           const body = (await request.json()) as { customFields?: Array<{ name?: string; value?: { name?: string } }> };
+          if (options.ignoreDirectStateWrite) return json(fieldsFor(issue));
           for (const field of body.customFields ?? []) {
             if (field.name !== 'State' || !field.value?.name) continue;
             const next = STATES.find((entry) => entry.name === field.value?.name);
@@ -310,6 +437,8 @@ export const startFakeYouTrack = (
     close: async () => {
       server.stop(true);
     },
-    issues: ISSUES,
+    issues,
+    projects,
+    commandQueries,
   };
 };
