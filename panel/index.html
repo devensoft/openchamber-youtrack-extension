@@ -7,6 +7,10 @@
     <style>
       :root {
         color-scheme: light dark;
+        /* The host publishes the app's corner radius with the rest of the
+           theme. Controls sit two steps below it, like the UI kit. */
+        --panel-radius: var(--radius, var(--oc-radius, 9px));
+        --panel-control-radius: calc(var(--panel-radius) - 2px);
       }
 
       * {
@@ -96,7 +100,9 @@
 
       .banner.error {
         border-color: var(--oc-error, #c92a2a);
-        color: var(--oc-error, #c92a2a);
+        /* `--oc-error` is the solid fill; text on a neutral surface takes the
+           host's computed `error-text` tone. */
+        color: var(--oc-error-text, var(--oc-error, #c92a2a));
       }
 
       .banner.info {
@@ -155,7 +161,7 @@
         width: 100%;
         padding: 8px 10px 8px 32px;
         border: 1px solid var(--oc-border, currentColor);
-        border-radius: 8px;
+        border-radius: var(--panel-control-radius);
         background: var(--oc-bg, transparent);
         color: var(--oc-fg, inherit);
         font: inherit;
@@ -396,7 +402,7 @@
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        color: var(--oc-warning, #b45309);
+        color: var(--oc-warning-text, var(--oc-warning, #b45309));
         font-size: 11px;
       }
 
@@ -422,7 +428,7 @@
       button {
         padding: 6px 11px;
         border: 1px solid var(--oc-border, currentColor);
-        border-radius: 7px;
+        border-radius: var(--panel-control-radius);
         background: var(--oc-elevated, transparent);
         color: var(--oc-fg, inherit);
         font: inherit;
