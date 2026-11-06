@@ -1,5 +1,5 @@
-// Bumps the package version and nothing else. A version bump is the release
-// signal: CI cuts v{version} when it is greater than the newest v* tag.
+// Bumps the package version and nothing else. The manual Release workflow
+// tags v{version} and publishes it after the bump is on main.
 //
 //   bun run bump patch|minor|major
 import { readFile, writeFile } from "node:fs/promises";

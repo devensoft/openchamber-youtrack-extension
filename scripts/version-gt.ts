@@ -1,8 +1,8 @@
 // Prints "true" when <left> is semver-greater than <right>, "false" otherwise.
 // Exit code 2 means one of the inputs is not a valid version.
 //
-// This is the release gate the CI uses: package.json's version only cuts a
-// v{version} tag when it is greater than the newest existing v* tag.
+// This is the release gate the manual Release workflow uses: package.json's
+// version only cuts a v{version} tag when it is greater than the newest v* tag.
 
 /** `null` when either input is not a valid semver version. */
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;

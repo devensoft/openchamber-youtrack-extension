@@ -1,0 +1,85 @@
+name: Release
+
+# Manual release only. Run this from main after the version bump is on main.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type release to confirm
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: inputs.confirm == 'release'
+    runs-on: ubuntu-latest
+    # Optional reviewer gate: configure the `release` environment with
+    # required reviewers in the repository settings to require approval.
+    environment: release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        run: bun run test
+
+      - name: Check the committed bundle is current
+        run: bun run verify
+
+      - name: Read the version
+        id: version
+        run: echo "value=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+
+      - name: Check the release gate
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          LAST=$(git tag --list 'v*' --sort=-v:refname | head -n 1)
+          if [ -z "$LAST" ] || [ "$LAST" = "v$VERSION" ]; then
+            echo "Releasing v$VERSION"
+            exit 0
+          fi
+          CREATE=$(bun run scripts/version-gt.ts "$VERSION" "${LAST#v}")
+          if [ "$CREATE" != "true" ]; then
+            echo "::error::package.json version $VERSION is not greater than the newest tag $LAST"
+            exit 1
+          fi
+
+      - name: Package
+        run: bun run package
+
+      - name: Tag and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.version.outputs.value }}
+        run: |
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists; reusing it."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Release $TAG @ $GITHUB_SHA"
+            git push origin "$TAG"
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.zip dist/*.sha256 --clobber
+          else
+            gh release create "$TAG" dist/*.zip dist/*.sha256 --title "Release $TAG" --generate-notes
+          fi
