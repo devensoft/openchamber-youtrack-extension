@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YouTrack — OpenChamber</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+      }
+
+      body {
+        background: var(--oc-bg, transparent);
+        color: var(--oc-fg, inherit);
+        font-family: var(--oc-font, system-ui, sans-serif);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      #root {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 16px;
+      }
+
+      .header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+
+      .pill {
+        padding: 1px 7px;
+        border: 1px solid var(--oc-border, currentColor);
+        border-radius: 999px;
+        color: var(--oc-muted, inherit);
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .lede {
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="main.js"></script>
+  </body>
+</html>
