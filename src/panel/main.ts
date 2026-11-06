@@ -1,6 +1,9 @@
 import { connectHost } from "@openchamber/sdk";
 import { applyHostReady } from "@openchamber/sdk/ui";
 
+// Injected by scripts/build.ts from package.json.
+declare const __EXTENSION_VERSION__: string;
+
 const host = connectHost();
 const root = document.querySelector<HTMLDivElement>("#root");
 
