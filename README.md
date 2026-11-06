@@ -39,7 +39,7 @@ directory and surface only.
 ```bash
 bun install
 bun run build        # writes panel/main.js
-bun run test         # manifest check + typecheck + unit tests
+bun run test         # typecheck + unit tests (manifest included)
 bun run verify       # build, then fail if panel/main.js is stale
 bun run package      # dist/openchamber-youtrack-extension-v0.1.0.zip
 bun run bump patch   # or minor / major
@@ -60,7 +60,6 @@ panel/index.html         panel document, loads main.js
 panel/main.js            committed bundle — do not edit by hand
 icon.svg                 the YT rail mark (our own asset, not a JetBrains logo)
 scripts/build.ts         Bun.build bundler
-scripts/check-manifest.ts  validates package.json against the SDK manifest schema
 scripts/package.ts       stages the runtime files and writes the release zip
 scripts/version-gt.ts    semver gate used by CI
 scripts/bump.ts          bumps the package version

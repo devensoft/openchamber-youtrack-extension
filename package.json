@@ -12,8 +12,7 @@
   "scripts": {
     "build": "bun run scripts/build.ts",
     "typecheck": "tsc --noEmit",
-    "check:manifest": "bun run scripts/check-manifest.ts",
-    "test": "bun run check:manifest && bun run typecheck && bun test",
+    "test": "bun run typecheck && bun test",
     "verify": "bun run build && git diff --exit-code -- panel/main.js",
     "package": "bun run scripts/package.ts",
     "bump": "bun run scripts/bump.ts"

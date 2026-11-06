@@ -26,7 +26,7 @@ Single-context: read `GLOSSARY.md` at the root (once it exists) and ADRs under
 ```bash
 bun install
 bun run build          # bundles src/panel/main.ts -> panel/main.js
-bun run test           # manifest schema check + tsc --noEmit + bun test
+bun run test           # tsc --noEmit + bun test (includes the manifest check)
 bun run verify         # build + fail when panel/main.js is stale
 bun run package        # dist/<name>-v<version>.zip + .sha256
 bun run bump patch|minor|major
