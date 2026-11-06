@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build and packaging output
+dist/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+bun-debug.log*
+
+# macOS
+.DS_Store
+**/.DS_Store
+._*
+
+# Editors
+.idea/
+.vscode/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# OpenChamber / OpenCode local state
+.openchamber/
