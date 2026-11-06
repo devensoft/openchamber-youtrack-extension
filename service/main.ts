@@ -27,21 +27,56 @@ import {
   readTrackerProviderRequest,
   type SourceControlJsonObject,
   type SourceControlOutboundResponse,
-  type TrackerProviderComment,
   type TrackerProviderContainer,
   type TrackerProviderDataByMethod,
   type TrackerProviderError,
   type TrackerProviderInputs,
-  type TrackerProviderItem,
-  type TrackerProviderItemSummary,
   type TrackerProviderLiveSummary,
   type TrackerProviderMethod,
-  type TrackerProviderPerson,
-  type TrackerProviderPriority,
   type TrackerProviderResult,
   type TrackerProviderStateCategory,
   type TrackerProviderWorkflowState,
 } from '@openchamber/sdk';
+
+import {
+  emptyPanelState,
+  knownProjectsOf,
+  modeOf,
+  parseSelectionRequest,
+  restrictSelection,
+  visibleProjects,
+  type PanelMode,
+  type PanelProject,
+  type PanelState,
+  type PanelUser,
+  type ProjectAccess,
+} from './panel-state.ts';
+import {
+  categoryFallback,
+  peopleFilterQuery,
+  priorityFilterQuery,
+  projectQuery,
+  quoteTerm,
+  stateNameQuery,
+} from './query.ts';
+import {
+  ISSUE_FIELDS,
+  ISSUE_FIELDS_WITH_COMMENTS,
+  absolute,
+  isStateValue,
+  stateOf,
+  toContainer,
+  toItem,
+  toLiveSummary,
+  toSummary,
+  toWorkflowState,
+  type YtComment,
+  type YtFieldValue,
+  type YtIssue,
+  type YtProject,
+  type YtProjectField,
+  type YtUser,
+} from './youtrack.ts';
 
 const port = Number(process.env.OPENCHAMBER_SERVICE_PORT);
 const serviceToken = process.env.OPENCHAMBER_SERVICE_TOKEN ?? '';
@@ -56,17 +91,6 @@ const outbound = createTrackerOutbound({ env: process.env });
 // later multi-account setup does not mix them. The last known project list is
 // kept too, so the panel is usable right after a service restart without
 // waiting for the board to call the provider again.
-type PanelMode = 'all' | 'selected';
-type ProjectAccess = 'edit' | 'read' | 'unknown';
-type PanelProject = TrackerProviderContainer & { access: ProjectAccess };
-type PanelUser = { id: string; login: string | null };
-type PanelState = {
-  selectedByInstance: Record<string, string[]>;
-  modeByInstance: Record<string, PanelMode>;
-  knownProjects: Record<string, PanelProject[]>;
-  currentUserByInstance: Record<string, PanelUser>;
-  lastInstance: string | null;
-};
 const CONFIG_DIR =
   process.platform === 'win32' && process.env.APPDATA
     ? join(process.env.APPDATA, 'openchamber')
@@ -106,34 +130,7 @@ const hostAccountState = async (instance: string): Promise<boolean | null> => {
   }
 };
 
-const knownProjectsOf = (value: unknown): Record<string, PanelProject[]> => {
-  if (!value || typeof value !== 'object') return {};
-  const result: Record<string, PanelProject[]> = {};
-  for (const [instance, projects] of Object.entries(value as Record<string, PanelProject[]>)) {
-    if (!Array.isArray(projects)) continue;
-    const cleaned = projects.flatMap((project) => {
-      if (!project || typeof project !== 'object' || typeof project.id !== 'string') return [];
-      const access: ProjectAccess =
-        project.access === 'edit' || project.access === 'read' ? project.access : 'unknown';
-      return [{
-        id: project.id,
-        key: typeof project.key === 'string' ? project.key : null,
-        name: typeof project.name === 'string' ? project.name : project.id,
-        access,
-      }];
-    });
-    result[instance] = cleaned;
-  }
-  return result;
-};
-
-let panelState: PanelState = {
-  selectedByInstance: {},
-  modeByInstance: {},
-  knownProjects: {},
-  currentUserByInstance: {},
-  lastInstance: null,
-};
+let panelState: PanelState = emptyPanelState();
 try {
   const parsed = JSON.parse(await readFile(CONFIG_PATH, 'utf8')) as Partial<PanelState>;
   if (parsed && typeof parsed.selectedByInstance === 'object') {
@@ -154,9 +151,7 @@ try {
 }
 
 /** Older files have no mode; a non-empty selection means it was in use. */
-const modeOf = (instance: string): PanelMode =>
-  panelState.modeByInstance[instance]
-    ?? ((panelState.selectedByInstance[instance]?.length ?? 0) > 0 ? 'selected' : 'all');
+const modeOfInstance = (instance: string): PanelMode => modeOf(panelState, instance);
 
 const ALL_CONTAINERS = new Map<string, PanelProject[]>(
   Object.entries(panelState.knownProjects),
@@ -181,84 +176,7 @@ const savePanelState = (): Promise<void> => {
 };
 
 // ---------------------------------------------------------------------------
-// The parts of YouTrack's JSON this service reads.
-
-type YtUser = {
-  id?: string;
-  login?: string | null;
-  name?: string | null;
-  fullName?: string | null;
-  email?: string | null;
-  avatarUrl?: string | null;
-};
-
-type YtProject = {
-  id: string;
-  name?: string | null;
-  shortName?: string | null;
-  leader?: { id?: string | null; login?: string | null } | null;
-  team?: {
-    allUsersGroup?: boolean | null;
-    users?: Array<{ id?: string | null; login?: string | null }> | null;
-  } | null;
-};
-
-/** An enum/state/user value. `isResolved` is only on state bundle elements. */
-type YtFieldValue = {
-  id?: string | null;
-  name?: string | null;
-  isResolved?: boolean | null;
-  login?: string | null;
-  fullName?: string | null;
-  avatarUrl?: string | null;
-};
-
-type YtCustomField = { name: string; value?: YtFieldValue | YtFieldValue[] | null };
-
-type YtTag = { id: string; name?: string | null; color?: { id?: string | null } | null };
-
-type YtComment = { id: string; text?: string | null; created?: number | null; author?: YtUser | null };
-
-type YtIssue = {
-  id: string;
-  idReadable?: string | null;
-  summary?: string | null;
-  description?: string | null;
-  created?: number | null;
-  updated?: number | null;
-  resolved?: number | null;
-  project?: YtProject | null;
-  customFields?: YtCustomField[] | null;
-  tags?: YtTag[] | null;
-  comments?: YtComment[] | null;
-};
-
-type YtProjectField = {
-  id: string;
-  name?: string | null;
-  field?: { name?: string | null } | null;
-  bundle?: { values?: YtFieldValue[] | null } | null;
-};
-
-/**
- * `value(...)` carries the union of every element shape: enum names, state
- * `isResolved`, and user fields. YouTrack ignores the projections that do not
- * apply to an element type.
- */
-const ISSUE_FIELDS = [
-  'id',
-  'idReadable',
-  'summary',
-  'description',
-  'created',
-  'updated',
-  'resolved',
-  'project(id,name,shortName)',
-  'tags(id,name,color(id))',
-  'customFields(name,value(id,name,isResolved,login,fullName,avatarUrl))',
-].join(',');
-
-const ISSUE_FIELDS_WITH_COMMENTS = `${ISSUE_FIELDS},comments(id,text,created,author(id,login,name,fullName,avatarUrl))`;
+// The service's calls to YouTrack.
 
 /** One page of `items.list`. Kept under YouTrack's usual 42-entry collection cap. */
 const PAGE_SIZE = 40;
@@ -325,161 +243,6 @@ const orNull = async <T,>(request: Promise<T>): Promise<T | null> => {
 };
 
 const seg = encodeURIComponent;
-
-// ---------------------------------------------------------------------------
-// YouTrack to the neutral shapes.
-
-const iso = (ms: number | null | undefined): string | null => (
-  typeof ms === 'number' && Number.isFinite(ms) ? new Date(ms).toISOString() : null
-);
-
-const absolute = (instance: string, url: string | null | undefined): string | null => {
-  if (!url) return null;
-  if (/^https?:\/\//i.test(url)) return url;
-  return `${instance}${url.startsWith('/') ? '' : '/'}${url}`;
-};
-
-const single = (value: YtFieldValue | YtFieldValue[] | null | undefined): YtFieldValue | null => {
-  if (Array.isArray(value)) return value[0] ?? null;
-  return value ?? null;
-};
-
-const fieldNamed = (issue: YtIssue, name: string): YtFieldValue | null => {
-  const field = issue.customFields?.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
-  return single(field?.value);
-};
-
-const isStateValue = (value: unknown): value is YtFieldValue => (
-  Object(value) === value &&
-  !Array.isArray(value) &&
-  typeof (value as YtFieldValue).isResolved === 'boolean'
-);
-
-/** The issue's state field, whatever the project calls it ("State", "Stage", "Status"). */
-const stateOf = (issue: YtIssue): { name: string; value: YtFieldValue | null } => {
-  for (const field of issue.customFields ?? []) {
-    const candidates = Array.isArray(field.value) ? field.value : [field.value];
-    const state = candidates.find(isStateValue);
-    if (state) return { name: field.name, value: state };
-  }
-  return { name: 'State', value: null };
-};
-
-/**
- * YouTrack has no portable todo/in-progress/done taxonomy: categories are
- * per-project workflows. Infer the neutral category from the bundle element's
- * resolution flag plus its name. See
- * .opencode/skills/openchamber-extensions/references/youtrack-feasibility.md.
- */
-const categoryOf = (
-  name: string | null | undefined,
-  isResolved: boolean | null | undefined,
-): TrackerProviderStateCategory | null => {
-  const text = (name ?? '').trim().toLowerCase();
-  if (/won'?t fix|cancel|duplicate|obsolete|rejected|declined|invalid/.test(text)) return 'canceled';
-  if (isResolved === true) return 'done';
-  if (!text) return null;
-  if (/backlog|icebox/.test(text)) return 'backlog';
-  if (/triage|inbox/.test(text)) return 'triage';
-  if (/in progress|in review|review|testing|\bqa\b|doing|started|in dev|development|implement|pending/.test(text)) return 'in-progress';
-  if (/to ?do|todo|submitted|open|new|ready|approved/.test(text)) return 'todo';
-  return 'todo';
-};
-
-const PRIORITY_BY_NAME: Record<string, TrackerProviderPriority> = {
-  'show-stopper': 'urgent',
-  'showstopper': 'urgent',
-  blocker: 'urgent',
-  critical: 'urgent',
-  highest: 'urgent',
-  major: 'high',
-  high: 'high',
-  normal: 'medium',
-  medium: 'medium',
-  minor: 'low',
-  low: 'low',
-  lowest: 'low',
-  'no priority': 'none',
-  none: 'none',
-};
-
-const priorityOf = (name: string | null | undefined): TrackerProviderPriority => {
-  if (!name) return 'none';
-  return PRIORITY_BY_NAME[name.trim().toLowerCase()] ?? 'none';
-};
-
-const personOf = (instance: string, value: YtFieldValue | YtUser | null | undefined): TrackerProviderPerson | null => {
-  if (!value) return null;
-  const name = ('fullName' in value ? value.fullName : undefined) ?? value.name ?? value.login ?? null;
-  if (!name) return null;
-  return { name, avatarUrl: absolute(instance, value.avatarUrl) };
-};
-
-const toContainer = (project: YtProject): TrackerProviderContainer => ({
-  id: project.id,
-  key: project.shortName ?? project.name ?? null,
-  name: project.name ?? project.shortName ?? project.id,
-});
-
-const toSummary = (call: Call, raw: YtIssue): TrackerProviderItemSummary => {
-  const identifier = (raw.idReadable ?? raw.id).toUpperCase();
-  const state = stateOf(raw);
-  const priority = fieldNamed(raw, 'priority');
-  const assignee = fieldNamed(raw, 'assignee');
-  return {
-    id: raw.id,
-    identifier,
-    title: raw.summary ?? identifier,
-    url: `${call.instance}/issue/${seg(identifier)}`,
-    state: state.value
-      ? {
-          id: state.value.id ?? null,
-          name: state.value.name ?? '',
-          category: categoryOf(state.value.name, state.value.isResolved),
-        }
-      : null,
-    priority: priorityOf(priority?.name),
-    labels: (raw.tags ?? []).map((tag) => ({
-      id: tag.id,
-      name: tag.name ?? tag.id,
-      color: tag.color?.id ?? null,
-    })),
-    assignee: personOf(call.instance, assignee),
-    container: raw.project ? toContainer(raw.project) : null,
-    updatedAt: iso(raw.updated),
-  };
-};
-
-const toComment = (call: Call, raw: YtComment): TrackerProviderComment => ({
-  id: raw.id,
-  body: raw.text ?? '',
-  createdAt: iso(raw.created),
-  author: personOf(call.instance, raw.author),
-});
-
-const toItem = (call: Call, raw: YtIssue): TrackerProviderItem => ({
-  ...toSummary(call, raw),
-  description: raw.description ?? null,
-  comments: (raw.comments ?? []).map((comment) => toComment(call, comment)),
-});
-
-const toWorkflowState = (value: YtFieldValue, position: number): TrackerProviderWorkflowState => ({
-  // The name is the id: `items.updateState` writes a state by name, and state
-  // names are unique inside a project's bundle.
-  id: value.name ?? value.id ?? `state-${position}`,
-  name: value.name ?? value.id ?? `State ${position}`,
-  category: categoryOf(value.name, value.isResolved),
-  position,
-});
-
-const toLiveSummary = (call: Call, raw: YtIssue): TrackerProviderLiveSummary => {
-  const summary = toSummary(call, raw);
-  return {
-    identifier: summary.identifier,
-    title: summary.title,
-    state: { name: summary.state?.name ?? 'Open', category: summary.state?.category ?? 'todo' },
-  };
-};
 
 // ---------------------------------------------------------------------------
 // Search filters. YouTrack has no neutral category names, so a category filter
@@ -550,20 +313,12 @@ const loadProjects = async (call: Call): Promise<PanelProject[]> => {
 
 const loadContainers = async (call: Call): Promise<TrackerProviderContainer[]> => {
   const all = await loadProjects(call);
-  const selected = new Set(panelState.selectedByInstance[call.instance] ?? []);
-  const visible =
-    modeOf(call.instance) === 'all' || selected.size === 0
-      ? all
-      : all.filter((container) => selected.has(container.id));
+  const visible = visibleProjects(
+    all,
+    modeOfInstance(call.instance),
+    panelState.selectedByInstance[call.instance] ?? [],
+  );
   return visible.map(({ id, key, name }) => ({ id, key, name }));
-};
-
-const projectQuery = (containers: TrackerProviderContainer[]): string | null => {
-  const terms = containers
-    .map((container) => container.key ?? container.name)
-    .filter((term): term is string => Boolean(term));
-  if (terms.length === 0) return null;
-  return `project: ${terms.map((term) => (/\s/.test(term) ? `{${term}}` : term)).join(', ')}`;
 };
 
 const containerFilterQuery = async (call: Call, containerId: string): Promise<string> => {
@@ -575,8 +330,7 @@ const containerFilterQuery = async (call: Call, containerId: string): Promise<st
   // unscoped list and the Group picker are filtered.
   const container = (ALL_CONTAINERS.get(call.instance) ?? []).find((entry) => entry.id === containerId);
   if (!container) throw new CallError(`Unknown YouTrack project ${containerId}.`, 404);
-  const term = container.key ?? container.name;
-  return `project: ${/\s/.test(term) ? `{${term}}` : term}`;
+  return `project: ${quoteTerm(container.key ?? container.name)}`;
 };
 
 // ---------------------------------------------------------------------------
@@ -592,7 +346,7 @@ const projectsAnswer = async () => {
       connected: false,
       instance: null,
       projects: [],
-      mode: (instance ? modeOf(instance) : 'all') as PanelMode,
+      mode: (instance ? modeOfInstance(instance) : 'all') as PanelMode,
       selected: instance ? panelState.selectedByInstance[instance] ?? [] : [],
       user: null,
       needsLoad: true,
@@ -603,7 +357,7 @@ const projectsAnswer = async () => {
     connected: true,
     instance,
     projects,
-    mode: (instance ? modeOf(instance) : 'all') as PanelMode,
+    mode: (instance ? modeOfInstance(instance) : 'all') as PanelMode,
     selected: instance ? panelState.selectedByInstance[instance] ?? [] : [],
     user: instance ? panelState.currentUserByInstance[instance] ?? null : null,
     needsLoad: !instance || projects.length === 0,
@@ -613,39 +367,22 @@ const projectsAnswer = async () => {
 const saveProjects = async (
   body: string,
 ): Promise<{ instance: string; mode: PanelMode; selected: string[] } | null> => {
-  let parsed: { instance?: unknown; mode?: unknown; selected?: unknown };
-  try {
-    parsed = JSON.parse(body) as { instance?: unknown; mode?: unknown; selected?: unknown };
-  } catch {
-    return null;
-  }
-
-  const instance = typeof parsed.instance === 'string' ? parsed.instance : lastInstance;
-  const selected = Array.isArray(parsed.selected)
-    ? parsed.selected.filter((id): id is string => typeof id === 'string')
-    : null;
-  if (!instance || !selected) return null;
-
-  const mode: PanelMode =
-    parsed.mode === 'all' || parsed.mode === 'selected'
-      ? parsed.mode
-      : selected.length === 0
-        ? 'all'
-        : 'selected';
-  if (mode === 'selected' && selected.length === 0) return null;
+  const parsed = parseSelectionRequest(body, lastInstance);
+  if (!parsed) return null;
 
   // The selection outlives the mode. "Show all" is a visibility switch, not a
   // reset: the projects the user picked are kept so switching back to
   // "selected" restores them, and the panel keeps showing them ticked.
-  const all = ALL_CONTAINERS.get(instance) ?? [];
-  const valid = new Set(all.map((container) => container.id));
-  const next = valid.size === 0 ? selected : selected.filter((id) => valid.has(id));
-  if (mode === 'selected' && next.length === 0) return null;
+  const valid = new Set(
+    (ALL_CONTAINERS.get(parsed.instance) ?? []).map((container) => container.id),
+  );
+  const saved = restrictSelection(parsed, valid);
+  if (!saved) return null;
 
-  panelState.modeByInstance[instance] = mode;
-  panelState.selectedByInstance[instance] = next;
+  panelState.modeByInstance[saved.instance] = saved.mode;
+  panelState.selectedByInstance[saved.instance] = saved.selected;
   await savePanelState();
-  return { instance, mode, selected: next };
+  return { instance: saved.instance, mode: saved.mode, selected: saved.selected };
 };
 
 
@@ -713,36 +450,11 @@ const stateFilterQuery = async (
   const category = categories.find((value) => value === filter);
   if (!category) return '#Unresolved';
 
-  if (!containerId) {
-    return category === 'canceled' ? '#Resolved' : '#Unresolved';
-  }
+  if (!containerId) return categoryFallback(category);
 
   const states = await loadStates(call, containerId);
   const names = states.filter((state) => state.category === category).map((state) => state.name);
-  if (names.length === 0) {
-    return category === 'canceled' ? '#Resolved' : '#Unresolved';
-  }
-  return `State: ${names.map((name) => (/\s/.test(name) ? `{${name}}` : name)).join(', ')}`;
-};
-
-const PRIORITY_QUERY: Record<Exclude<TrackerProviderPriority, 'none'>, string[]> = {
-  urgent: ['Show-stopper', 'Critical', 'Blocker'],
-  high: ['Major', 'High'],
-  medium: ['Normal', 'Medium'],
-  low: ['Minor', 'Low'],
-};
-
-const priorityFilterQuery = (priority: TrackerProviderInputs['items.list']['priority']): string | null => {
-  if (priority === 'all' || priority === 'none') return null;
-  const names = PRIORITY_QUERY[priority];
-  if (!names) return null;
-  return `Priority: ${names.map((name) => (/\s/.test(name) ? `{${name}}` : name)).join(', ')}`;
-};
-
-const peopleFilterQuery = (people: TrackerProviderInputs['items.list']['people']): string | null => {
-  if (people === 'me') return 'for: me';
-  if (people === 'created') return 'created by: me';
-  return null;
+  return stateNameQuery(names) ?? categoryFallback(category);
 };
 
 // ---------------------------------------------------------------------------
@@ -838,7 +550,7 @@ const handlers: Handlers = {
     const page = await api<YtIssue[]>(call, 'GET', '/api/issues', { query });
     const hasMore = page.length >= PAGE_SIZE;
     return {
-      items: page.map((issue) => toSummary(call, issue)),
+      items: page.map((issue) => toSummary(call.instance, issue)),
       cursor: hasMore ? String(skip + page.length) : null,
       hasMore,
     };
@@ -853,7 +565,7 @@ const handlers: Handlers = {
       `/api/issues/${seg(input.id)}`,
       { query: { fields: ISSUE_FIELDS_WITH_COMMENTS } },
     ));
-    return { item: issue ? toItem(call, issue) : null };
+    return { item: issue ? toItem(call.instance, issue) : null };
   },
 
   'items.updateState': async (call, input) => {
@@ -878,7 +590,7 @@ const handlers: Handlers = {
     );
 
     if (stateOf(updated).value?.name === input.stateId) {
-      return { item: toItem(call, updated) };
+      return { item: toItem(call.instance, updated) };
     }
 
     // Fallback: a workflow rule may reject a direct field write. The command
@@ -901,7 +613,7 @@ const handlers: Handlers = {
       `/api/issues/${seg(input.id)}`,
       { query: { fields: ISSUE_FIELDS_WITH_COMMENTS } },
     );
-    return { item: toItem(call, again) };
+    return { item: toItem(call.instance, again) };
   },
 
   'items.liveSummaries': async (call, input) => {
@@ -919,7 +631,7 @@ const handlers: Handlers = {
           `/api/issues/${seg(next)}`,
           { query: { fields: ISSUE_FIELDS } },
         ));
-        if (issue) items.push(toLiveSummary(call, issue));
+        if (issue) items.push(toLiveSummary(call.instance, issue));
       }
     });
     await Promise.all(workers);
