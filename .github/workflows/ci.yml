@@ -1,0 +1,75 @@
+name: CI
+
+# Tests and the committed-bundle check run on pull requests and main. On
+# main, a version past the newest v* tag cuts v{version} and opens the
+# GitHub release.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        run: bun run test
+
+      - name: Build
+        run: bun run build
+
+      - name: Check the committed bundle is current
+        run: git diff --exit-code -- panel/main.js
+
+      - name: Decide whether the version cuts a release
+        id: release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          LAST=$(git tag --list 'v*' --sort=-v:refname | head -n 1)
+
+          if [ -z "$LAST" ]; then
+            CREATE=true
+          else
+            CREATE=$(bun run scripts/version-gt.ts "$VERSION" "${LAST#v}")
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "create=$CREATE" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and release
+        if: steps.release.outputs.create == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          TAG="v$VERSION"
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists; leaving it."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Release $TAG @ $GITHUB_SHA" "$GITHUB_SHA"
+            git push origin "$TAG"
+          fi
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "Release $TAG" --generate-notes
+          fi
