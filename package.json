@@ -1,10 +1,10 @@
 {
   "name": "openchamber-youtrack-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "A YouTrack integration for OpenChamber.",
+  "description": "A YouTrack tracker provider for OpenChamber.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/devensoft/openchamber-youtrack-extension.git"
@@ -12,8 +12,8 @@
   "scripts": {
     "build": "bun run scripts/build.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun run typecheck && bun test",
-    "verify": "bun run build && git diff --exit-code -- panel/main.js",
+    "test": "bun run build && bun run typecheck && bun test",
+    "verify": "bun run build && git diff --exit-code -- service/main.js panel/main.js",
     "package": "bun run scripts/package.ts",
     "bump": "bun run scripts/bump.ts"
   },
@@ -22,6 +22,7 @@
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",
+    "@types/node": "^22.10.2",
     "typescript": "^5.9.2"
   },
   "openchamber": {
@@ -35,6 +36,53 @@
         "name": "YouTrack",
         "icon": "icon.svg",
         "entry": "panel/index.html"
+      },
+      "service": {
+        "entry": "service/main.js",
+        "runtime": "host",
+        "provides": [
+          "tracker"
+        ]
+      },
+      "tracker": {
+        "wire": 1,
+        "label": "YouTrack",
+        "instances": {
+          "kind": "user",
+          "label": "Server address",
+          "placeholder": "https://youtrack.example.com"
+        },
+        "auth": {
+          "token": {
+            "header": "authorization",
+            "scheme": "bearer",
+            "createPath": "/users/me?tab=account-security"
+          }
+        },
+        "capabilities": {
+          "stateUpdate": true,
+          "labels": true,
+          "priority": true,
+          "filters": {
+            "people": true,
+            "priority": true
+          }
+        },
+        "stateFilters": [
+          "open",
+          "all",
+          "todo",
+          "in-progress",
+          "done"
+        ],
+        "identifier": "key-number",
+        "urls": {
+          "item": [
+            "/issue/{id}",
+            "/{segments+}/issue/{id}",
+            "/agiles/{segment}/current?issue={id}"
+          ]
+        }
       }
     }
   }

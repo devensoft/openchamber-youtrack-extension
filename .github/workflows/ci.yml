@@ -37,7 +37,7 @@ jobs:
         run: bun run build
 
       - name: Check the committed bundle is current
-        run: git diff --exit-code -- panel/main.js
+        run: git diff --exit-code -- service/main.js panel/main.js
 
       - name: Decide whether the version cuts a release
         id: release

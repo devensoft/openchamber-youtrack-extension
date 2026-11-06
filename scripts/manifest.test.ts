@@ -10,4 +10,6 @@ test("package.json is a valid OpenChamber manifest", async () => {
   }
 
   expect(result.manifest.contributes.panel?.name).toBe("YouTrack");
+  expect(result.manifest.contributes.panel?.entry).toBe("panel/index.html");
+  expect(result.manifest.contributes.tracker?.label).toBe("YouTrack");
 });
