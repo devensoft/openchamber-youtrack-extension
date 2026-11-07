@@ -33,6 +33,7 @@ export type FakeProject = {
   id: string;
   name: string;
   shortName: string;
+  description?: string;
   states: FakeState[];
   leader?: { id: string; login: string };
   team?: { users: Array<{ id: string; login: string }>; allUsersGroup: boolean };
@@ -45,7 +46,7 @@ export type FakeIssueSpec = {
   description?: string;
   state?: string;
   priority?: string;
-  project?: 'p-proj' | 'p-ops';
+  project?: 'p-proj' | 'p-ops' | 'p-example';
   assignee?: { login: string; fullName: string } | null;
   reporter?: { login: string; fullName: string } | null;
 };
@@ -68,6 +69,8 @@ export type FakeYouTrackOptions = {
   projectsStatus?: number;
   /** Add a project with no team data, so its access is unknown. */
   withTeamlessProject?: boolean;
+  /** Add EXAMPLE with the folder-mapping JSON in its description. */
+  mappingProject?: boolean;
   /** Make OPS visible to everyone, so the account can edit it. */
   everyoneGroup?: boolean;
 };
@@ -123,6 +126,7 @@ const baseProjects = (options: FakeYouTrackOptions): FakeProject[] => {
       id: 'p-proj',
       name: 'Probe Project',
       shortName: 'PROJ',
+      description: 'The project this provider is built for.',
       states: STATES.map(clone),
       leader: { id: 'u-1', login: 'mona' },
       team: { users: [{ id: 'u-1', login: 'mona' }], allUsersGroup: false },
@@ -131,6 +135,7 @@ const baseProjects = (options: FakeYouTrackOptions): FakeProject[] => {
       id: 'p-ops',
       name: 'Operations',
       shortName: 'OPS',
+      description: 'openchamber-project: acme/operations-repo',
       states: STATES.map(clone),
       team: { users: [{ id: 'u-2', login: 'alex' }], allUsersGroup: options.everyoneGroup === true },
     },
@@ -140,13 +145,23 @@ const baseProjects = (options: FakeYouTrackOptions): FakeProject[] => {
       id: 'p-mystery',
       name: 'Mystery Project',
       shortName: 'MYST',
+      description: 'No team is listed for this project.',
+      states: STATES.map(clone),
+    });
+  }
+  if (options.mappingProject) {
+    projects.push({
+      id: 'p-example',
+      name: 'Example Project',
+      shortName: 'EXAMPLE',
+      description: 'Folder metadata lives on the mapping issue.',
       states: STATES.map(clone),
     });
   }
   return projects;
 };
 
-const baseIssues = (): FakeIssue[] => [
+const baseIssues = (options: FakeYouTrackOptions): FakeIssue[] => [
   makeIssue(
     '2-1',
     'PROJ-1',
@@ -172,6 +187,40 @@ const baseIssues = (): FakeIssue[] => [
   makeIssue('3-1', 'OPS-1', 'Rotate the deploy key', 'Quarterly rotation.', 'Open', 'Critical', {
     type: 'Task',
   }),
+  ...(options.mappingProject
+    ? [
+        makeIssue(
+          '4-1',
+          'EXAMPLE-1',
+          'Folder mapping metadata',
+          [
+            'Folder mapping metadata:',
+            '',
+            '```json',
+            '{',
+            '  "repoUrl": "https://github.com/acme/example.git",',
+            '  "ocProjectName": "example",',
+            '  "ignoredField": "ignored"',
+            '}',
+            '```',
+          ].join('\n'),
+          'Open',
+          'Normal',
+          { projectId: 'p-example' },
+        ),
+        // Same project, no mapping metadata: it must not leak into the
+        // repository's item picker.
+        makeIssue(
+          '4-2',
+          'EXAMPLE-2',
+          'No mapping metadata',
+          'An ordinary issue in the same project.',
+          'Open',
+          'Normal',
+          { projectId: 'p-example' },
+        ),
+      ]
+    : []),
 ];
 
 const issueFromSpec = (spec: FakeIssueSpec, index: number): FakeIssue => {
@@ -221,7 +270,7 @@ export const startFakeYouTrack = (options: FakeYouTrackOptions = {}): FakeYouTra
   const token = options.token ?? 'demo';
   const projects = baseProjects(options);
   const issues = [
-    ...baseIssues(),
+    ...baseIssues(options),
     ...(options.extraIssues ?? []).map(issueFromSpec),
     ...Array.from({ length: options.generatedIssues ?? 0 }, (_, index) => generatedIssue(index + 1)),
   ];
@@ -353,7 +402,14 @@ export const startFakeYouTrack = (options: FakeYouTrackOptions = {}): FakeYouTra
       if (url.pathname === '/api/admin/projects' && request.method === 'GET') {
         if (options.projectsStatus) return json({ error: 'server error' }, options.projectsStatus);
         return json(
-          projects.map(({ id, name, shortName, leader, team }) => ({ id, name, shortName, leader, team })),
+          projects.map(({ id, name, shortName, description, leader, team }) => ({
+            id,
+            name,
+            shortName,
+            description,
+            leader,
+            team,
+          })),
         );
       }
 
