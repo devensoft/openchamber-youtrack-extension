@@ -19,8 +19,8 @@ Issues live in GitHub Issues and are handled with the `gh` CLI. See
 
 ### Domain docs
 
-Single-context: read `GLOSSARY.md` at the root (once it exists) and ADRs under
-`docs/adr/`. See `docs/agents/domain.md`.
+Single-context: read `GLOSSARY.md` at the root when it exists, and any ADRs
+under `docs/adr/` when present. See `docs/agents/domain.md`.
 
 ## Commands
 
@@ -115,10 +115,11 @@ bun run bump patch|minor|major
 - A repository match can be shared by several issues/projects; the service
   returns all matched project ids and the description filter still decides the
   items. `containers.list` stays `{ id, key, name }`.
-- The composer's **Link YouTrack Issue** picker calls `items.list` with the
-  native project directory, so the issue-description filter applies there. The
-  host caches `/items/list` for 30 seconds; a directory change can therefore
-  miss an already-used picker until the cache expires or the page reloads.
+- On a host that passes the native project directory, the composer's **Link
+  YouTrack Issue** picker calls `items.list` with it, so the issue-description
+  filter applies there. The host caches `/items/list` for 30 seconds; a
+  directory change can therefore miss an already-used picker until the cache
+  expires or the page reloads.
 - The YouTrack **Type** custom field is not part of the neutral tracker shape.
   It is not a dedicated filter, badge, or create field; search can still use
   `Type: Epic`.

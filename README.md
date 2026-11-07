@@ -46,9 +46,10 @@ fenced block with an optional language tag:
   are ignored.
 
 The native mapping under **Settings → Integrations** still lists every
-container. The repository filter is applied to the board and the composer
-picker when the host passes the open project directory; an explicit container
-selection is not repository-filtered.
+YouTrack project. The Issues and PRs board lists every project by default.
+The composer's **Link YouTrack Issue** picker is scoped to the repository when
+the host passes the open project directory. An explicit project selection is
+not repository-filtered.
 
 ## Development
 
