@@ -12,7 +12,7 @@ const archive = join(dist, `${pkg.name}-v${pkg.version}.zip`);
 await rm(dist, { recursive: true, force: true });
 await mkdir(join(stage, "service"), { recursive: true });
 
-for (const path of ["package.json", "README.md", "LICENSE", "icon.svg", "panel"]) {
+for (const path of ["package.json", "README.md", "LICENSE", "icon.svg"]) {
   await cp(path, join(stage, basename(path)), { recursive: true });
 }
 await cp("service/main.js", join(stage, "service/main.js"));

@@ -32,6 +32,7 @@ export type YtProject = {
   id: string;
   name?: string | null;
   shortName?: string | null;
+  description?: string | null;
   leader?: { id?: string | null; login?: string | null } | null;
   team?: {
     allUsersGroup?: boolean | null;
@@ -138,8 +139,7 @@ export const stateOf = (issue: YtIssue): { name: string; value: YtFieldValue | n
 /**
  * YouTrack has no portable todo/in-progress/done taxonomy: categories are
  * per-project workflows. Infer the neutral category from the bundle element's
- * resolution flag plus its name. See
- * .opencode/skills/openchamber-extensions/references/youtrack-feasibility.md.
+ * resolution flag plus its name.
  */
 export const categoryOf = (
   name: string | null | undefined,
@@ -155,6 +155,43 @@ export const categoryOf = (
   if (/to ?do|todo|submitted|open|new|ready|approved/.test(text)) return 'todo';
   return 'todo';
 };
+
+/**
+ * The default YouTrack workflow's unresolved state names. Only used when an
+ * unscoped category filter has too many visible projects to read each
+ * workflow, so the answer stays one query instead of a project-wide scan.
+ */
+const COMMON_STATE_NAMES = [
+  'Triage',
+  'Inbox',
+  'Backlog',
+  'Icebox',
+  'Submitted',
+  'Open',
+  'New',
+  'Ready',
+  'Approved',
+  'To Do',
+  'In Progress',
+  'In Review',
+  'Review',
+  'Testing',
+  'QA',
+  'Doing',
+  'Started',
+  'In Development',
+  'Pending Deploy',
+  "Won't fix",
+  'Duplicate',
+  'Obsolete',
+  'Rejected',
+  'Declined',
+  'Invalid',
+];
+
+/** The common names for one neutral category, empty for a resolved category. */
+export const commonStateNames = (category: TrackerProviderStateCategory): string[] =>
+  COMMON_STATE_NAMES.filter((name) => categoryOf(name, false) === category);
 
 const PRIORITY_BY_NAME: Record<string, TrackerProviderPriority> = {
   'show-stopper': 'urgent',

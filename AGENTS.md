@@ -4,11 +4,11 @@ Guidance for coding agents working in this repository.
 
 ## What this repo is
 
-An OpenChamber **tracker provider** with a project selector for YouTrack. The
-repository root is the installable extension: `package.json` carries both npm
-metadata and the OpenChamber manifest under `openchamber`. Version 0.1.0
-implements the provider (read, attach, state update, comments, live summaries)
-and a rail panel that stores which projects appear.
+An OpenChamber **tracker provider** for YouTrack. The repository root is the
+installable extension: `package.json` carries both npm metadata and the
+OpenChamber manifest under `openchamber`. Version 0.1.0 implements the
+provider (read, attach, state update, comments, live summaries) and uses
+OpenChamber's native project mapping. There is no extension panel.
 
 ## Agent skills
 
@@ -17,10 +17,14 @@ and a rail panel that stores which projects appear.
 Issues live in GitHub Issues and are handled with the `gh` CLI. See
 `docs/agents/issue-tracker.md`.
 
+### Triage labels
+
+The five canonical triage roles use their default names. See
+`docs/agents/triage-labels.md`.
+
 ### Domain docs
 
-Single-context: read `GLOSSARY.md` at the root (once it exists) and ADRs under
-`docs/adr/`. See `docs/agents/domain.md`.
+Single-context. See `docs/agents/domain.md`.
 
 ## Commands
 
@@ -36,9 +40,9 @@ bun run bump patch|minor|major
 ## Non-negotiables
 
 - **Commit the bundle.** OpenChamber installs extensions without building them.
-  Any change under `service/` or `src/panel/` must be followed by `bun run
-  build`, and both `service/main.js` and `panel/main.js` must be committed in
-  the same change. Never hand-edit either bundle.
+  Any change under `service/` must be followed by `bun run build`, and
+  `service/main.js` must be committed in the same change. Never hand-edit the
+  bundle. There is no panel bundle.
 - **Pin the SDK.** `@openchamber/sdk` is pinned exactly (`2.6.1`); the manifest
   targets OpenChamber `>=2.6.0`. Bump deliberately and rerun the provider tests.
 - **Keep the manifest valid.** `bun run test` parses `package.json` with
@@ -70,60 +74,56 @@ bun run bump patch|minor|major
 - **Linked items and live states** — `items.liveSummaries` for tracked items.
 - **Rail Tracker** — tracked items for the current session or branch; it is not
   the full list.
-- **YouTrack rail panel** — the project selector. It reads/writes `/projects`
-  through the service and sets which containers the board and Group picker show.
-  `panel.entry` is present for this panel.
+- **Native project mapping** — `capabilities.projectMapping` is on. Settings →
+  Integrations maps YouTrack containers to OpenChamber projects, and the
+  board's container picker uses that mapping. The extension draws no panel.
+- **Native project directory** — the host passes the open project's `directory`
+  (or `projectPath`) and optionally `projectName` on `items.list` /
+  `containers.list`. The service uses that folder; there is no rail panel, no
+  `/projects` route and no panel state.
 
 ## Conventions
 
 - TypeScript, ESM, Bun. `strict` and `noUncheckedIndexedAccess` are on.
-- `service/main.ts` is the source; `service/main.js` is the committed bundle.
+- `service/main.ts` and `service/mapping.ts` are the sources;
+  `service/main.js` is the committed bundle. There is no panel bundle.
 - Tests run the checked-in bundle against a fake YouTrack and a callback
   listener that plays OpenChamber's outbound proxy. Add a wire test for every
   call and filter you touch.
 - State categories are per-project. Infer them from `isResolved` plus the state
   name; user overrides are a later feature.
-- Project visibility is set by the rail panel. The service stores the mode
-  (`all` or `selected`), the selection, the last known project list and the
-  current user id under `~/.config/openchamber/youtrack-extension-projects.json`
-  (or `$XDG_CONFIG_HOME/openchamber` on Linux/macOS,
-  `%APPDATA%\openchamber` on Windows) and filters `containers.list` and the
-  unscoped `items.list`. Explicit `containerId` reads are not filtered, so
-  tracked items and links still resolve. The default mode is `all`; an empty
-  selection is refused in `selected` mode, while `all` keeps the saved
-  selection so a switch back restores it. `auth.verify` preloads the project
-  list with the handle from connecting the account, so the panel does not wait
-  for the first board call. No names are hardcoded. The host mapping UI stays
-  off. Automatic session comments remain off too.
-- A disconnect removes OpenChamber's account but does not stop the extension
-  service. `GET /projects` therefore checks OpenChamber's
-  `tracker-accounts.json` for a valid `ext-youtrack` account before returning
-  the cached list. It reads only the instance and account `status`, never the
-  `credential`; an unreadable store is `unknown` and keeps the cache. With no
-  valid account the answer is `connected: false`, no projects, and
-  `needsLoad: true`, so the panel shows the connect prompt. The panel also
-  refreshes on window focus and visibility change, redrawing only when the
-  answer changed.
-- Project access is inferred from the project team (`team.users`,
-  `team.allUsersGroup`) and the leader. YouTrack's `/api/assignedRoles` needs
-  **Update Project**, so a normal token gets 403 and cannot read effective
-  roles. Treat the label as a team-membership signal, never as an enforced
-  permission. `loadProjects` keeps `access` in the panel cache;
-  `containers.list` maps to the neutral `{ id, key, name }` shape and never
-  sends `access` to the host.
-- A fresh panel starts with no boxes ticked. Row clicks toggle the box; Select
-  all and Unselect all cover the bulk cases. Search filters by name/key;
-  the list groups Can edit, Read only, then Access unknown, alphabetical inside
-  each group. There is no header Refresh; the conditional Reload only re-reads
-  the service after the tracker has filled in access.
-- `service/main.ts` and `src/panel/main.ts` are the sources; both built files
-  are committed. The panel talks only through `host.serviceRequest`.
-- The composer's **Link YouTrack Issue** picker calls the unscoped
-  `items.list`, so the service's selection filter applies there too. The host
-  caches `/items/list` for 30 seconds and the picker caches its query, and the
-  extension has no API to clear either. A selection change can therefore miss
-  an already-used picker until the cache expires or the page reloads; do not
-  claim the picker refreshes instantly.
+- No panel. The service does not read or write
+  `youtrack-extension-projects.json`, `/projects`, or
+  `tracker-accounts.json`; the host owns the account and the native mapping.
+  `containers.list` returns every project, and an explicit `containerId`
+  read is not scoped by the repository filter.
+- The service reads the native project folder's git remote with
+  `git -C <folder> remote get-url origin` (then the first remote), cached for
+  five minutes. The folder basename, the native project name, the git remote
+  URL and the repo name are the search identities.
+- The mapping convention is read from **issue descriptions**: the service
+  searches issues for those identities, parses the matched issue's fenced
+  JSON, uses that issue's project as the `items.list` scope and keeps only the
+  issues whose description carries the matching JSON. The project description
+  is not a fallback. The test issue is the one whose description carries the
+  mapping JSON; do not use other issues as a metadata source.
+- The description parser accepts a fenced JSON block with an optional language
+  (` ```json `), or a description that is bare JSON, and ignores unknown
+  fields. Identity keys are `repoUrl`, `githubUrl`, `gitRemote`, `gitUrl`,
+  `remoteUrl`, `remote`, `repositoryUrl`, `repo`, `repository`, `repoName`,
+  `repositoryName`, `ocProjectName`, `projectName`, `project` and the
+  `youtrackProject*` aliases. `repoUrl` accepts a full GitHub/ssh URL,
+  `github.com/owner/repo`, `owner/repo`, or a bare repo name. Unknown
+  fields, assignees and other metadata are ignored.
+  Assignee/reporter come from issue fields, not the JSON.
+- A repository match can be shared by several issues/projects; the service
+  returns all matched project ids and the description filter still decides the
+  items. `containers.list` stays `{ id, key, name }`.
+- On a host that passes the native project directory, the composer's **Link
+  YouTrack Issue** picker calls `items.list` with it, so the issue-description
+  filter applies there. The host caches `/items/list` for 30 seconds; a
+  directory change can therefore miss an already-used picker until the cache
+  expires or the page reloads.
 - The YouTrack **Type** custom field is not part of the neutral tracker shape.
   It is not a dedicated filter, badge, or create field; search can still use
   `Type: Epic`.
@@ -131,10 +131,10 @@ bun run bump patch|minor|major
 
 ## CI and release
 
-- `.github/workflows/ci.yml` is repo-owned. It runs the tests, the service
-  build and the committed-bundle check on pull requests and `main`. On `main`,
-  it tags `v{version}` and creates the GitHub release when `package.json` is
-  greater than the newest `v*` tag.
-- `.github/workflows/publish.yml` builds, verifies `service/main.js`, packages
-  the runtime files and attaches the zip to the `v{version}` release.
+- `.github/workflows/ci.yml` is repo-owned and read-only. It runs the tests and
+  the committed-bundle check on pull requests and `main`.
+- `.github/workflows/release.yml` is manual. After the bump is on `main` it
+  tests, verifies `service/main.js`, tags `v{version}`, packages the runtime
+  files and attaches the zip to the release when `package.json` is greater
+  than the newest `v*` tag.
 - There is no private CI dependency; `bun install` works for any contributor.

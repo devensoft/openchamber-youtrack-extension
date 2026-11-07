@@ -10,6 +10,9 @@ test("package.json is a valid OpenChamber manifest", async () => {
   }
 
   expect(result.manifest.contributes.panel?.name).toBe("YouTrack");
-  expect(result.manifest.contributes.panel?.entry).toBe("panel/index.html");
+  // Native projects/mapping only: no rail panel page, no sessions capability.
+  expect(result.manifest.contributes.panel?.entry).toBeUndefined();
+  expect(result.manifest.contributes.capabilities).toBeUndefined();
   expect(result.manifest.contributes.tracker?.label).toBe("YouTrack");
+  expect(result.manifest.contributes.tracker?.capabilities.projectMapping).toBe(true);
 });
