@@ -17,10 +17,14 @@ OpenChamber's native project mapping. There is no extension panel.
 Issues live in GitHub Issues and are handled with the `gh` CLI. See
 `docs/agents/issue-tracker.md`.
 
+### Triage labels
+
+The five canonical triage roles use their default names. See
+`docs/agents/triage-labels.md`.
+
 ### Domain docs
 
-Single-context: read `GLOSSARY.md` at the root when it exists, and any ADRs
-under `docs/adr/` when present. See `docs/agents/domain.md`.
+Single-context. See `docs/agents/domain.md`.
 
 ## Commands
 
