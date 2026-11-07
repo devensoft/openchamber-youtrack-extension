@@ -13,7 +13,7 @@
     "build": "bun run scripts/build.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun run build && bun run typecheck && bun test",
-    "verify": "bun run build && git diff --exit-code -- service/main.js panel/main.js",
+    "verify": "bun run build && git diff --exit-code -- service/main.js",
     "package": "bun run scripts/package.ts",
     "bump": "bun run scripts/bump.ts"
   },
@@ -34,8 +34,7 @@
       "panel": {
         "id": "youtrack",
         "name": "YouTrack",
-        "icon": "icon.svg",
-        "entry": "panel/index.html"
+        "icon": "icon.svg"
       },
       "service": {
         "entry": "service/main.js",
@@ -63,6 +62,7 @@
           "stateUpdate": true,
           "labels": true,
           "priority": true,
+          "projectMapping": true,
           "filters": {
             "people": true,
             "priority": true

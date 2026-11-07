@@ -1,5 +1,5 @@
-// Builds the committed bundles. OpenChamber installs extensions from Git
-// without building them, so service/main.js and panel/main.js are checked in.
+// Builds the committed bundle. OpenChamber installs extensions from Git
+// without building them, so service/main.js is checked in.
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -9,12 +9,6 @@ const targets = [
     out: "service/main.js",
     format: "esm" as const,
     target: "node" as const,
-  },
-  {
-    entry: "src/panel/main.ts",
-    out: "panel/main.js",
-    format: "iife" as const,
-    target: "browser" as const,
   },
 ];
 
