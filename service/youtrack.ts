@@ -32,7 +32,6 @@ export type YtProject = {
   id: string;
   name?: string | null;
   shortName?: string | null;
-  description?: string | null;
   leader?: { id?: string | null; login?: string | null } | null;
   team?: {
     allUsersGroup?: boolean | null;

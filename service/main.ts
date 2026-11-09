@@ -14,9 +14,6 @@
  * scopes the list to that issue's project.
  */
 import http from 'node:http';
-import { execFile } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, isAbsolute, join } from 'node:path';
 
 import {
   SESSION_EVENTS_PATH,
@@ -43,8 +40,10 @@ import {
   descriptionMatches,
   repoNameOf,
   type IssueMapping,
-  type MappingHint,
 } from './mapping.ts';
+import { scopeOf, type ProjectScope } from './project.ts';
+import { latestSessionDirectory, rememberSessionDirectory } from './session-scope.ts';
+import { createTtlCache } from './ttl-cache.ts';
 import {
   categoryFallback,
   peopleFilterQuery,
@@ -82,40 +81,6 @@ if (!port || !serviceToken) {
 
 const outbound = createTrackerOutbound({ env: process.env });
 
-// The tracker call does not carry the OpenChamber session directory. The
-// service learns it from the latest top-level session event instead, and
-// keeps the last one in its own data folder across idle stops.
-const serviceDataDir = process.env.OPENCHAMBER_SERVICE_DATA_DIR?.trim() || null;
-const sessionScopeFile = serviceDataDir ? join(serviceDataDir, 'session-scope.json') : null;
-let latestSessionDirectory: string | null = null;
-
-const readSessionScope = (): void => {
-  if (!sessionScopeFile) return;
-  try {
-    const stored: { directory?: unknown } = JSON.parse(readFileSync(sessionScopeFile, 'utf8'));
-    if (typeof stored.directory === 'string' && isAbsolute(stored.directory)) {
-      latestSessionDirectory = stored.directory;
-    }
-  } catch {
-    // No stored scope yet, or the file is unreadable. The next event writes it.
-  }
-};
-
-const saveSessionScope = (directory: string): void => {
-  latestSessionDirectory = directory;
-  if (!sessionScopeFile) return;
-  try {
-    mkdirSync(serviceDataDir!, { recursive: true });
-    writeFileSync(sessionScopeFile, JSON.stringify({ directory }));
-  } catch (error) {
-    console.error(
-      `[youtrack] could not save the session folder: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-};
-
-readSessionScope();
-
 // ---------------------------------------------------------------------------
 // The service's calls to YouTrack.
 
@@ -125,9 +90,13 @@ const PAGE_SIZE = 40;
 /** Who a call is for: the server it reaches and the handle that reaches it. */
 type Call = { instance: string; handle: string; accountId: string };
 
-/** Cache scope: the server and the account, never the server alone. */
+/**
+ * Cache scope: the server and the account, never the server alone. A call
+ * without an account gets a per-call scope, so it cannot reuse another
+ * account's data.
+ */
 const cacheKey = (call: Call, ...parts: string[]): string =>
-  [call.instance, call.accountId, ...parts].join('\u0000');
+  [call.instance, call.accountId || `handle:${call.handle}`, ...parts].join('\u0000');
 
 /** A failed call, answered as `{ ok: false, error }` with this status. */
 class CallError extends Error {
@@ -189,13 +158,6 @@ const orNull = async <T,>(request: Promise<T>): Promise<T | null> => {
 
 const seg = encodeURIComponent;
 
-/** A string field a newer host may add to a tracker input. */
-const optionalText = (input: unknown, key: string): string | null => {
-  if (!input || typeof input !== 'object') return null;
-  const value = (input as Record<string, unknown>)[key];
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-};
-
 // ---------------------------------------------------------------------------
 // The project list. The native mapping UI and the board read it; a failed read
 // keeps the last good list, or answers none so no project filter is sent.
@@ -203,8 +165,7 @@ const optionalText = (input: unknown, key: string): string | null => {
 const PROJECTS_TTL_MS = 5 * 60_000;
 const PROJECTS_RETRY_MS = 30_000;
 
-type ProjectCacheEntry = { at: number; ttl: number; projects: TrackerProviderContainer[] };
-const PROJECTS_CACHE = new Map<string, ProjectCacheEntry>();
+const PROJECTS_CACHE = createTtlCache<TrackerProviderContainer[]>(PROJECTS_TTL_MS);
 const PROJECTS_INFLIGHT = new Map<string, Promise<TrackerProviderContainer[]>>();
 const ALL_CONTAINERS = new Map<string, TrackerProviderContainer[]>();
 
@@ -234,7 +195,7 @@ const readProjects = async (call: Call): Promise<TrackerProviderContainer[]> => 
 const loadProjects = async (call: Call): Promise<TrackerProviderContainer[]> => {
   const key = cacheKey(call);
   const cached = PROJECTS_CACHE.get(key);
-  if (cached && Date.now() - cached.at < cached.ttl) return cached.projects;
+  if (cached !== undefined) return cached;
 
   const inflight = PROJECTS_INFLIGHT.get(key);
   if (inflight) return inflight;
@@ -242,17 +203,17 @@ const loadProjects = async (call: Call): Promise<TrackerProviderContainer[]> => 
   const request = (async () => {
     try {
       const all = await readProjects(call);
-      PROJECTS_CACHE.set(key, { at: Date.now(), ttl: PROJECTS_TTL_MS, projects: all });
+      PROJECTS_CACHE.set(key, all);
       ALL_CONTAINERS.set(key, all);
       return all;
     } catch (error) {
       console.error(
         `[youtrack] could not read the project list: ${error instanceof Error ? error.message : String(error)}`,
       );
-      const fallback = PROJECTS_CACHE.get(key)?.projects
+      const fallback = PROJECTS_CACHE.get(key)
         ?? ALL_CONTAINERS.get(key)
         ?? [];
-      PROJECTS_CACHE.set(key, { at: Date.now(), ttl: PROJECTS_RETRY_MS, projects: fallback });
+      PROJECTS_CACHE.set(key, fallback, PROJECTS_RETRY_MS);
       return fallback;
     } finally {
       PROJECTS_INFLIGHT.delete(key);
@@ -261,8 +222,6 @@ const loadProjects = async (call: Call): Promise<TrackerProviderContainer[]> => 
   PROJECTS_INFLIGHT.set(key, request);
   return request;
 };
-
-const loadContainers = async (call: Call): Promise<TrackerProviderContainer[]> => loadProjects(call);
 
 const containerFilterQuery = async (call: Call, containerId: string): Promise<string> => {
   const key = cacheKey(call);
@@ -291,118 +250,24 @@ const containerFilterQuery = async (call: Call, containerId: string): Promise<st
 };
 
 // ---------------------------------------------------------------------------
-// The native project folder to the issue-description mapping.
-
-/** How long a folder's git answer is reused. */
-const GIT_ANSWER_TTL_MS = 5 * 60_000;
-
-const runGit = (directory: string, args: string[]): Promise<string> => new Promise((resolve, reject) => {
-  execFile(
-    'git',
-    ['-C', directory, ...args],
-    { timeout: 3000, maxBuffer: 64 * 1024 },
-    (error, stdout) => {
-      if (error) reject(error);
-      else resolve(String(stdout).trim());
-    },
-  );
-});
-
-type GitIdentity = { remote: string; repo: string | null };
-const GIT_REMOTE_CACHE = new Map<string, { at: number; value: GitIdentity | null }>();
-
-/**
- * The native project's git remote. `git -C <folder> remote get-url origin`,
- * then the first remote when there is no origin. Worktrees, `git@host:owner/repo`
- * and ssh URLs are git's problem, not ours. A folder without git, or a failed
- * command, is `null`.
- */
-const gitIdentityOf = async (directory: string | null): Promise<GitIdentity | null> => {
-  if (!directory || !isAbsolute(directory) || directory.includes('\0')) return null;
-  const cached = GIT_REMOTE_CACHE.get(directory);
-  if (cached && Date.now() - cached.at < GIT_ANSWER_TTL_MS) return cached.value;
-
-  let remote = '';
-  try {
-    remote = await runGit(directory, ['remote', 'get-url', 'origin']);
-  } catch {
-    // No origin; try the first remote below.
-  }
-  if (!remote) {
-    try {
-      const names = (await runGit(directory, ['remote']))
-        .split(/\r?\n/)
-        .map((name) => name.trim())
-        .filter(Boolean);
-      if (names[0]) remote = await runGit(directory, ['remote', 'get-url', names[0]]);
-    } catch {
-      // Not a git repository, or git is unavailable.
-    }
-  }
-
-  const value = remote ? { remote, repo: repoNameOf(remote) } : null;
-  GIT_REMOTE_CACHE.set(directory, { at: Date.now(), value });
-  return value;
-};
-
-const PROJECT_ROOT_CACHE = new Map<string, { at: number; value: string | null }>();
-
-/**
- * The main checkout of a worktree, or the repository root of a subfolder.
- * `git worktree list --porcelain` puts the main worktree first. A folder that
- * is not a repository answers itself, so the remote read still decides.
- */
-const projectRootOf = async (directory: string | null): Promise<string | null> => {
-  if (!directory || !isAbsolute(directory) || directory.includes('\0')) return null;
-  const cached = PROJECT_ROOT_CACHE.get(directory);
-  if (cached && Date.now() - cached.at < GIT_ANSWER_TTL_MS) return cached.value;
-
-  let value: string | null = null;
-  try {
-    const output = await runGit(directory, ['worktree', 'list', '--porcelain']);
-    const first = output.split(/\r?\n/).find((line) => line.startsWith('worktree '));
-    if (first) value = first.slice('worktree '.length).trim() || null;
-  } catch {
-    // Not a git repository, or git is unavailable.
-  }
-  value ??= directory;
-  PROJECT_ROOT_CACHE.set(directory, { at: Date.now(), value });
-  return value;
-};
-
-const mappingHintsOf = async (
-  directory: string | null,
-  projectName: string | null,
-): Promise<MappingHint[]> => {
-  const hints: MappingHint[] = [];
-  const root = await projectRootOf(directory);
-  const folder = root ? basename(root) : '';
-  if (folder) hints.push({ value: folder, source: 'folder' });
-  if (projectName) hints.push({ value: projectName, source: 'name' });
-  const git = await gitIdentityOf(root);
-  if (git?.remote) hints.push({ value: git.remote, source: 'repo' });
-  if (git?.repo) hints.push({ value: git.repo, source: 'repo' });
-  return hints;
-};
+// The issue-description mapping. Folder and git probing live in project.ts.
 
 /** How long an issue-description mapping is reused. */
 const ISSUE_MAPPING_TTL_MS = 60_000;
-const ISSUE_MAPPING_CACHE = new Map<string, { at: number; value: IssueMapping }>();
+const ISSUE_MAPPING_CACHE = createTtlCache<IssueMapping>(ISSUE_MAPPING_TTL_MS);
 
 const issueMappingOf = async (
   call: Call,
-  directory: string | null,
-  projectName: string | null,
-  hints: readonly MappingHint[],
+  scope: ProjectScope,
 ): Promise<IssueMapping | null> => {
-  if (hints.length === 0) return null;
-  const key = cacheKey(call, directory ?? '', projectName ?? '');
+  if (scope.hints.length === 0) return null;
+  const key = cacheKey(call, scope.directory ?? '', scope.projectName ?? '');
   const cached = ISSUE_MAPPING_CACHE.get(key);
-  if (cached && Date.now() - cached.at < ISSUE_MAPPING_TTL_MS) return cached.value;
+  if (cached !== undefined) return cached;
 
-  const values = hints.map((hint) => hint.value).filter(Boolean);
+  const values = scope.hints.map((hint) => hint.value).filter(Boolean);
   const terms = [...new Set(
-    hints
+    scope.hints
       .map((hint) => repoNameOf(hint.value) ?? hint.value.trim())
       .filter((term) => term.length >= 3),
   )];
@@ -434,7 +299,7 @@ const issueMappingOf = async (
     projects: [...projects.values()],
     terms: [...matchedTerms],
   };
-  ISSUE_MAPPING_CACHE.set(key, { at: Date.now(), value });
+  ISSUE_MAPPING_CACHE.set(key, value);
   return value;
 };
 
@@ -475,7 +340,7 @@ const observedStates = async (
   call: Call,
   containerId: string,
 ): Promise<TrackerProviderWorkflowState[]> => {
-  const container = (await loadContainers(call)).find((entry) => entry.id === containerId);
+  const container = (await loadProjects(call)).find((entry) => entry.id === containerId);
   if (!container) return [];
 
   const term = container.key ?? container.name;
@@ -554,7 +419,7 @@ const stateFilterQuery = async (
     return stateNameQuery(names) ?? categoryFallback(category);
   }
 
-  const visible = containers ?? await loadContainers(call);
+  const visible = containers ?? await loadProjects(call);
   if (visible.length > MAX_STATE_CONTAINERS) {
     return stateNameQuery(commonStateNames(category)) ?? categoryFallback(category);
   }
@@ -622,18 +487,11 @@ const handlers: Handlers = {
     const parts: string[] = [];
 
     // The host may pass the open folder. When it does not, the latest
-    // top-level session event supplies it. Resolve a worktree to its main
-    // checkout before using the folder name as a mapping hint.
-    const requestedDirectory = optionalText(input, 'directory')
-      ?? optionalText(input, 'projectPath')
-      ?? latestSessionDirectory;
-    const directory = await projectRootOf(requestedDirectory);
-    const projectName = optionalText(input, 'projectName');
-    const hints = await mappingHintsOf(directory, projectName);
-    const mapping = hints.length > 0
-      ? await issueMappingOf(call, directory, projectName, hints)
-      : null;
-    const mapped = !input.containerId && mapping && mapping.projects.length > 0 ? mapping : null;
+    // top-level session event supplies it. A worktree is resolved to its main
+    // checkout before its name becomes a mapping hint.
+    const scope = await scopeOf(input, latestSessionDirectory());
+    const mapping = await issueMappingOf(call, scope);
+    const mapped = mapping && mapping.projects.length > 0 ? mapping : null;
 
     if (input.containerId) {
       parts.push(await containerFilterQuery(call, input.containerId));
@@ -641,7 +499,7 @@ const handlers: Handlers = {
       const scope = projectQuery(mapped.projects);
       if (scope) parts.push(scope);
     } else {
-      const scope = projectQuery(await loadContainers(call));
+      const scope = projectQuery(await loadProjects(call));
       if (scope) parts.push(scope);
     }
 
@@ -675,10 +533,10 @@ const handlers: Handlers = {
     if (parts.length > 0) query.query = parts.join(' and ');
 
     const page = await api<YtIssue[]>(call, 'GET', '/api/issues', { query });
-    const items = metadataTerm && hints.length > 0
+    const items = metadataTerm && scope.hints.length > 0
       ? page.filter((issue) => descriptionMatches(
           issue.description,
-          hints.map((hint) => hint.value),
+          scope.hints.map((hint) => hint.value),
         ))
       : page;
     const hasMore = page.length >= PAGE_SIZE;
@@ -780,22 +638,17 @@ const handlers: Handlers = {
     // call, or the latest session folder, warms the issue-description cache so
     // the following items.list does not repeat the search; the container list
     // itself stays complete.
-    const requestedDirectory = optionalText(input, 'directory')
-      ?? optionalText(input, 'projectPath')
-      ?? latestSessionDirectory;
-    const directory = await projectRootOf(requestedDirectory);
-    const projectName = optionalText(input, 'projectName');
-    if (directory || projectName) {
+    const scope = await scopeOf(input, latestSessionDirectory());
+    if (scope.directory || scope.projectName) {
       try {
-        const hints = await mappingHintsOf(directory, projectName);
-        await issueMappingOf(call, directory, projectName, hints);
+        await issueMappingOf(call, scope);
       } catch (error) {
         console.error(
           `[youtrack] could not resolve the project mapping: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }
-    return { containers: await loadContainers(call) };
+    return { containers: await loadProjects(call) };
   },
 
   'comments.create': async (call, input) => {
@@ -879,10 +732,8 @@ const server = http.createServer((req, res) => {
         topLevel
         && (event.event.type === 'turn-started' || event.event.type === 'session-created')
         && directory
-        && isAbsolute(directory)
-        && !directory.includes('\0')
       ) {
-        saveSessionScope(directory);
+        rememberSessionDirectory(directory);
       }
       send(res, 200, { ok: true });
     }).catch(() => send(res, 500, { ok: false, error: 'could not read the event' }));

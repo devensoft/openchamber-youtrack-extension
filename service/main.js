@@ -1,8 +1,5 @@
 // service/main.ts
 import http from "node:http";
-import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, isAbsolute, join } from "node:path";
 // node_modules/@openchamber/sdk/dist/scrollbar-style.js
 var GUEST_SCROLLING_ATTRIBUTE = "data-oc-scrolling";
 var GUEST_SCROLLBAR_CSS = `
@@ -455,6 +452,139 @@ var descriptionMatches = (description, hints) => {
   return wanted.some((form) => described.includes(form));
 };
 
+// service/project.ts
+import { execFile } from "node:child_process";
+import { basename, isAbsolute } from "node:path";
+
+// service/ttl-cache.ts
+var createTtlCache = (defaultTtlMs) => {
+  const entries = new Map;
+  return {
+    get: (key) => {
+      const entry = entries.get(key);
+      if (!entry)
+        return;
+      if (Date.now() - entry.at >= entry.ttl) {
+        entries.delete(key);
+        return;
+      }
+      return entry.value;
+    },
+    set: (key, value, ttlMs = defaultTtlMs) => {
+      entries.set(key, { at: Date.now(), ttl: ttlMs, value });
+    },
+    delete: (key) => {
+      entries.delete(key);
+    }
+  };
+};
+
+// service/project.ts
+var GIT_ANSWER_TTL_MS = 5 * 60000;
+var runGit = (directory, args) => new Promise((resolve, reject) => {
+  execFile("git", ["-C", directory, ...args], { timeout: 3000, maxBuffer: 64 * 1024 }, (error, stdout) => {
+    if (error)
+      reject(error);
+    else
+      resolve(String(stdout).trim());
+  });
+});
+var remoteCache = createTtlCache(GIT_ANSWER_TTL_MS);
+var rootCache = createTtlCache(GIT_ANSWER_TTL_MS);
+var gitIdentityOf = async (directory) => {
+  if (!directory || !isAbsolute(directory) || directory.includes("\x00"))
+    return null;
+  const cached = remoteCache.get(directory);
+  if (cached !== undefined)
+    return cached;
+  let remote = "";
+  try {
+    remote = await runGit(directory, ["remote", "get-url", "origin"]);
+  } catch {}
+  if (!remote) {
+    try {
+      const names = (await runGit(directory, ["remote"])).split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
+      if (names[0])
+        remote = await runGit(directory, ["remote", "get-url", names[0]]);
+    } catch {}
+  }
+  const value = remote ? { remote, repo: repoNameOf(remote) } : null;
+  remoteCache.set(directory, value);
+  return value;
+};
+var projectRootOf = async (directory) => {
+  if (!directory || !isAbsolute(directory) || directory.includes("\x00"))
+    return null;
+  const cached = rootCache.get(directory);
+  if (cached !== undefined)
+    return cached;
+  let value = null;
+  try {
+    const output = await runGit(directory, ["worktree", "list", "--porcelain"]);
+    const first = output.split(/\r?\n/).find((line) => line.startsWith("worktree "));
+    if (first)
+      value = first.slice("worktree ".length).trim() || null;
+  } catch {}
+  value ??= directory;
+  rootCache.set(directory, value);
+  return value;
+};
+var textOf = (input, key) => {
+  if (!input || typeof input !== "object")
+    return null;
+  const value = input[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+};
+var hintsOf = async (directory, projectName) => {
+  const hints = [];
+  const folder = directory ? basename(directory) : "";
+  if (folder)
+    hints.push({ value: folder });
+  if (projectName)
+    hints.push({ value: projectName });
+  const git = await gitIdentityOf(directory);
+  if (git?.remote)
+    hints.push({ value: git.remote });
+  if (git?.repo)
+    hints.push({ value: git.repo });
+  return hints;
+};
+var scopeOf = async (input, fallback) => {
+  const requested = textOf(input, "directory") ?? textOf(input, "projectPath") ?? fallback;
+  const directory = await projectRootOf(requested);
+  const projectName = textOf(input, "projectName");
+  return { directory, projectName, hints: await hintsOf(directory, projectName) };
+};
+
+// service/session-scope.ts
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { isAbsolute as isAbsolute2, join } from "node:path";
+var dataDir = process.env.OPENCHAMBER_SERVICE_DATA_DIR?.trim() || null;
+var file = dataDir ? join(dataDir, "session-scope.json") : null;
+var latest = null;
+var latestSessionDirectory = () => latest;
+var rememberSessionDirectory = (directory) => {
+  if (!directory || !isAbsolute2(directory) || directory.includes("\x00"))
+    return;
+  latest = directory;
+  if (!file)
+    return;
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(file, JSON.stringify({ directory }));
+  } catch (error) {
+    console.error(`[youtrack] could not save the session folder: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+if (file) {
+  try {
+    const stored = JSON.parse(readFileSync(file, "utf8"));
+    if (typeof stored.directory === "string" && isAbsolute2(stored.directory)) {
+      latest = stored.directory;
+    }
+  } catch {}
+}
+
 // service/query.ts
 var quoteTerm = (term) => /\s/.test(term) ? `{${term}}` : term;
 var valueListQuery = (field, names) => `${field}: ${names.map(quoteTerm).join(", ")}`;
@@ -669,33 +799,8 @@ if (!port || !serviceToken) {
   process.exit(1);
 }
 var outbound = createTrackerOutbound({ env: process.env });
-var serviceDataDir = process.env.OPENCHAMBER_SERVICE_DATA_DIR?.trim() || null;
-var sessionScopeFile = serviceDataDir ? join(serviceDataDir, "session-scope.json") : null;
-var latestSessionDirectory = null;
-var readSessionScope = () => {
-  if (!sessionScopeFile)
-    return;
-  try {
-    const stored = JSON.parse(readFileSync(sessionScopeFile, "utf8"));
-    if (typeof stored.directory === "string" && isAbsolute(stored.directory)) {
-      latestSessionDirectory = stored.directory;
-    }
-  } catch {}
-};
-var saveSessionScope = (directory) => {
-  latestSessionDirectory = directory;
-  if (!sessionScopeFile)
-    return;
-  try {
-    mkdirSync(serviceDataDir, { recursive: true });
-    writeFileSync(sessionScopeFile, JSON.stringify({ directory }));
-  } catch (error) {
-    console.error(`[youtrack] could not save the session folder: ${error instanceof Error ? error.message : String(error)}`);
-  }
-};
-readSessionScope();
 var PAGE_SIZE = 40;
-var cacheKey = (call, ...parts) => [call.instance, call.accountId, ...parts].join("\x00");
+var cacheKey = (call, ...parts) => [call.instance, call.accountId || `handle:${call.handle}`, ...parts].join("\x00");
 
 class CallError extends Error {
   status;
@@ -743,15 +848,9 @@ var orNull = async (request) => {
   }
 };
 var seg = encodeURIComponent;
-var optionalText = (input, key) => {
-  if (!input || typeof input !== "object")
-    return null;
-  const value = input[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-};
 var PROJECTS_TTL_MS = 5 * 60000;
 var PROJECTS_RETRY_MS = 30000;
-var PROJECTS_CACHE = new Map;
+var PROJECTS_CACHE = createTtlCache(PROJECTS_TTL_MS);
 var PROJECTS_INFLIGHT = new Map;
 var ALL_CONTAINERS = new Map;
 var readProjects = async (call) => {
@@ -776,21 +875,21 @@ var readProjects = async (call) => {
 var loadProjects = async (call) => {
   const key = cacheKey(call);
   const cached = PROJECTS_CACHE.get(key);
-  if (cached && Date.now() - cached.at < cached.ttl)
-    return cached.projects;
+  if (cached !== undefined)
+    return cached;
   const inflight = PROJECTS_INFLIGHT.get(key);
   if (inflight)
     return inflight;
   const request = (async () => {
     try {
       const all = await readProjects(call);
-      PROJECTS_CACHE.set(key, { at: Date.now(), ttl: PROJECTS_TTL_MS, projects: all });
+      PROJECTS_CACHE.set(key, all);
       ALL_CONTAINERS.set(key, all);
       return all;
     } catch (error) {
       console.error(`[youtrack] could not read the project list: ${error instanceof Error ? error.message : String(error)}`);
-      const fallback = PROJECTS_CACHE.get(key)?.projects ?? ALL_CONTAINERS.get(key) ?? [];
-      PROJECTS_CACHE.set(key, { at: Date.now(), ttl: PROJECTS_RETRY_MS, projects: fallback });
+      const fallback = PROJECTS_CACHE.get(key) ?? ALL_CONTAINERS.get(key) ?? [];
+      PROJECTS_CACHE.set(key, fallback, PROJECTS_RETRY_MS);
       return fallback;
     } finally {
       PROJECTS_INFLIGHT.delete(key);
@@ -799,7 +898,6 @@ var loadProjects = async (call) => {
   PROJECTS_INFLIGHT.set(key, request);
   return request;
 };
-var loadContainers = async (call) => loadProjects(call);
 var containerFilterQuery = async (call, containerId) => {
   const key = cacheKey(call);
   const known = ALL_CONTAINERS.get(key) ?? [];
@@ -820,81 +918,17 @@ var containerFilterQuery = async (call, containerId) => {
   }
   throw new CallError(`Unknown YouTrack project ${containerId}.`, 404);
 };
-var GIT_ANSWER_TTL_MS = 5 * 60000;
-var runGit = (directory, args) => new Promise((resolve, reject) => {
-  execFile("git", ["-C", directory, ...args], { timeout: 3000, maxBuffer: 64 * 1024 }, (error, stdout) => {
-    if (error)
-      reject(error);
-    else
-      resolve(String(stdout).trim());
-  });
-});
-var GIT_REMOTE_CACHE = new Map;
-var gitIdentityOf = async (directory) => {
-  if (!directory || !isAbsolute(directory) || directory.includes("\x00"))
-    return null;
-  const cached = GIT_REMOTE_CACHE.get(directory);
-  if (cached && Date.now() - cached.at < GIT_ANSWER_TTL_MS)
-    return cached.value;
-  let remote = "";
-  try {
-    remote = await runGit(directory, ["remote", "get-url", "origin"]);
-  } catch {}
-  if (!remote) {
-    try {
-      const names = (await runGit(directory, ["remote"])).split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
-      if (names[0])
-        remote = await runGit(directory, ["remote", "get-url", names[0]]);
-    } catch {}
-  }
-  const value = remote ? { remote, repo: repoNameOf(remote) } : null;
-  GIT_REMOTE_CACHE.set(directory, { at: Date.now(), value });
-  return value;
-};
-var PROJECT_ROOT_CACHE = new Map;
-var projectRootOf = async (directory) => {
-  if (!directory || !isAbsolute(directory) || directory.includes("\x00"))
-    return null;
-  const cached = PROJECT_ROOT_CACHE.get(directory);
-  if (cached && Date.now() - cached.at < GIT_ANSWER_TTL_MS)
-    return cached.value;
-  let value = null;
-  try {
-    const output = await runGit(directory, ["worktree", "list", "--porcelain"]);
-    const first = output.split(/\r?\n/).find((line) => line.startsWith("worktree "));
-    if (first)
-      value = first.slice("worktree ".length).trim() || null;
-  } catch {}
-  value ??= directory;
-  PROJECT_ROOT_CACHE.set(directory, { at: Date.now(), value });
-  return value;
-};
-var mappingHintsOf = async (directory, projectName) => {
-  const hints = [];
-  const root = await projectRootOf(directory);
-  const folder = root ? basename(root) : "";
-  if (folder)
-    hints.push({ value: folder, source: "folder" });
-  if (projectName)
-    hints.push({ value: projectName, source: "name" });
-  const git = await gitIdentityOf(root);
-  if (git?.remote)
-    hints.push({ value: git.remote, source: "repo" });
-  if (git?.repo)
-    hints.push({ value: git.repo, source: "repo" });
-  return hints;
-};
 var ISSUE_MAPPING_TTL_MS = 60000;
-var ISSUE_MAPPING_CACHE = new Map;
-var issueMappingOf = async (call, directory, projectName, hints) => {
-  if (hints.length === 0)
+var ISSUE_MAPPING_CACHE = createTtlCache(ISSUE_MAPPING_TTL_MS);
+var issueMappingOf = async (call, scope) => {
+  if (scope.hints.length === 0)
     return null;
-  const key = cacheKey(call, directory ?? "", projectName ?? "");
+  const key = cacheKey(call, scope.directory ?? "", scope.projectName ?? "");
   const cached = ISSUE_MAPPING_CACHE.get(key);
-  if (cached && Date.now() - cached.at < ISSUE_MAPPING_TTL_MS)
-    return cached.value;
-  const values = hints.map((hint) => hint.value).filter(Boolean);
-  const terms = [...new Set(hints.map((hint) => repoNameOf(hint.value) ?? hint.value.trim()).filter((term) => term.length >= 3))];
+  if (cached !== undefined)
+    return cached;
+  const values = scope.hints.map((hint) => hint.value).filter(Boolean);
+  const terms = [...new Set(scope.hints.map((hint) => repoNameOf(hint.value) ?? hint.value.trim()).filter((term) => term.length >= 3))];
   const projects = new Map;
   const matchedTerms = new Set;
   for (const term of terms) {
@@ -924,7 +958,7 @@ var issueMappingOf = async (call, directory, projectName, hints) => {
     projects: [...projects.values()],
     terms: [...matchedTerms]
   };
-  ISSUE_MAPPING_CACHE.set(key, { at: Date.now(), value });
+  ISSUE_MAPPING_CACHE.set(key, value);
   return value;
 };
 var STATE_NAMES_CACHE = new Map;
@@ -948,7 +982,7 @@ var loadStates = async (call, containerId) => {
   return states;
 };
 var observedStates = async (call, containerId) => {
-  const container = (await loadContainers(call)).find((entry) => entry.id === containerId);
+  const container = (await loadProjects(call)).find((entry) => entry.id === containerId);
   if (!container)
     return [];
   const term = container.key ?? container.name;
@@ -1002,7 +1036,7 @@ var stateFilterQuery = async (call, filter, containerId, containers) => {
     const names = states.filter((state) => state.category === category).map((state) => state.name);
     return stateNameQuery(names) ?? categoryFallback(category);
   }
-  const visible = containers ?? await loadContainers(call);
+  const visible = containers ?? await loadProjects(call);
   if (visible.length > MAX_STATE_CONTAINERS) {
     return stateNameQuery(commonStateNames(category)) ?? categoryFallback(category);
   }
@@ -1045,12 +1079,9 @@ var handlers = {
   "items.list": async (call, input) => {
     const skip = Math.max(0, Number(input.cursor ?? "0") || 0);
     const parts = [];
-    const requestedDirectory = optionalText(input, "directory") ?? optionalText(input, "projectPath") ?? latestSessionDirectory;
-    const directory = await projectRootOf(requestedDirectory);
-    const projectName = optionalText(input, "projectName");
-    const hints = await mappingHintsOf(directory, projectName);
-    const mapping = hints.length > 0 ? await issueMappingOf(call, directory, projectName, hints) : null;
-    const mapped = !input.containerId && mapping && mapping.projects.length > 0 ? mapping : null;
+    const scope = await scopeOf(input, latestSessionDirectory());
+    const mapping = await issueMappingOf(call, scope);
+    const mapped = mapping && mapping.projects.length > 0 ? mapping : null;
     if (input.containerId) {
       parts.push(await containerFilterQuery(call, input.containerId));
     } else if (mapped) {
@@ -1058,7 +1089,7 @@ var handlers = {
       if (scope)
         parts.push(scope);
     } else {
-      const scope = projectQuery(await loadContainers(call));
+      const scope = projectQuery(await loadProjects(call));
       if (scope)
         parts.push(scope);
     }
@@ -1084,7 +1115,7 @@ var handlers = {
     if (parts.length > 0)
       query.query = parts.join(" and ");
     const page = await api(call, "GET", "/api/issues", { query });
-    const items = metadataTerm && hints.length > 0 ? page.filter((issue) => descriptionMatches(issue.description, hints.map((hint) => hint.value))) : page;
+    const items = metadataTerm && scope.hints.length > 0 ? page.filter((issue) => descriptionMatches(issue.description, scope.hints.map((hint) => hint.value))) : page;
     const hasMore = page.length >= PAGE_SIZE;
     return {
       items: items.map((issue) => toSummary(call.instance, issue)),
@@ -1136,18 +1167,15 @@ var handlers = {
     states: await loadStates(call, input.containerId)
   }),
   "containers.list": async (call, input) => {
-    const requestedDirectory = optionalText(input, "directory") ?? optionalText(input, "projectPath") ?? latestSessionDirectory;
-    const directory = await projectRootOf(requestedDirectory);
-    const projectName = optionalText(input, "projectName");
-    if (directory || projectName) {
+    const scope = await scopeOf(input, latestSessionDirectory());
+    if (scope.directory || scope.projectName) {
       try {
-        const hints = await mappingHintsOf(directory, projectName);
-        await issueMappingOf(call, directory, projectName, hints);
+        await issueMappingOf(call, scope);
       } catch (error) {
         console.error(`[youtrack] could not resolve the project mapping: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    return { containers: await loadContainers(call) };
+    return { containers: await loadProjects(call) };
   },
   "comments.create": async (call, input) => {
     const comment = await orNull(api(call, "POST", `/api/issues/${seg(input.identifier)}/comments`, { query: { fields: "id,text" }, body: { text: input.body } }));
@@ -1207,8 +1235,8 @@ var server = http.createServer((req, res) => {
       }
       const directory = event.event.project.directory;
       const topLevel = event.event.session.parentId === null;
-      if (topLevel && (event.event.type === "turn-started" || event.event.type === "session-created") && directory && isAbsolute(directory) && !directory.includes("\x00")) {
-        saveSessionScope(directory);
+      if (topLevel && (event.event.type === "turn-started" || event.event.type === "session-created") && directory) {
+        rememberSessionDirectory(directory);
       }
       send(res, 200, { ok: true });
     }).catch(() => send(res, 500, { ok: false, error: "could not read the event" }));

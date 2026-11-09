@@ -10,7 +10,7 @@
     "url": "git+https://github.com/devensoft/openchamber-youtrack-extension.git"
   },
   "scripts": {
-    "build": "bunx openchamber-guest-bundle --node service/main.ts service/main.js",
+    "build": "openchamber-guest-bundle --node service/main.ts service/main.js",
     "typecheck": "tsc --noEmit",
     "test": "bun run build && bun run typecheck && bun test",
     "verify": "bun run build && git diff --exit-code -- service/main.js",

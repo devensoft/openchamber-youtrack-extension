@@ -11,8 +11,6 @@ import type { TrackerProviderContainer } from '@openchamber/sdk';
 
 export type MappingHint = {
   value: string;
-  /** Where the value came from, for the search order and tests. */
-  source: 'folder' | 'repo' | 'name';
 };
 
 export type IssueMapping = {
