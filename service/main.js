@@ -1081,7 +1081,7 @@ var handlers = {
     const parts = [];
     const scope = await scopeOf(input, latestSessionDirectory());
     const mapping = await issueMappingOf(call, scope);
-    const mapped = mapping && mapping.projects.length > 0 ? mapping : null;
+    const mapped = !input.containerId && mapping && mapping.projects.length > 0 ? mapping : null;
     if (input.containerId) {
       parts.push(await containerFilterQuery(call, input.containerId));
     } else if (mapped) {

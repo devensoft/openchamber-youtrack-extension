@@ -491,7 +491,9 @@ const handlers: Handlers = {
     // checkout before its name becomes a mapping hint.
     const scope = await scopeOf(input, latestSessionDirectory());
     const mapping = await issueMappingOf(call, scope);
-    const mapped = mapping && mapping.projects.length > 0 ? mapping : null;
+    // An explicit container read is the board's own scope. The repository
+    // filter applies only to the all-containers list.
+    const mapped = !input.containerId && mapping && mapping.projects.length > 0 ? mapping : null;
 
     if (input.containerId) {
       parts.push(await containerFilterQuery(call, input.containerId));

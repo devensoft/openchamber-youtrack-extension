@@ -258,6 +258,10 @@ describe('YouTrack tracker provider', () => {
       const listed = await read('items.list', input, mapped.origin);
       expect(listed.items.map((item) => item.identifier)).toEqual(['EXAMPLE-1']);
 
+      // An explicit container read is not narrowed by the repository filter.
+      const explicit = await read('items.list', { ...input, containerId: 'p-example' }, mapped.origin);
+      expect(explicit.items.map((item) => item.identifier)).toEqual(['EXAMPLE-1', 'EXAMPLE-2']);
+
       // The native project mapping still sees every container; only the list
       // is scoped to the issue whose description names the repository.
       const { containers } = await read('containers.list', {}, mapped.origin);
