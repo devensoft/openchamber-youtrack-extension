@@ -303,6 +303,13 @@ describe('YouTrack tracker provider', () => {
       'PROJ-2',
       'OPS-1',
     ]);
+    expect((await read('items.list', { ...LIST, state: 'todo' })).items.map((item) => item.identifier)).toEqual([
+      'PROJ-1',
+      'OPS-1',
+    ]);
+    expect((await read('items.list', { ...LIST, state: 'in-progress' })).items.map((item) => item.identifier)).toEqual([
+      'PROJ-2',
+    ]);
     expect((await read('items.list', { ...LIST, state: 'done' })).items.map((item) => item.identifier)).toEqual(['PROJ-3']);
     expect(
       (await read('items.list', { ...LIST, state: 'in-progress', containerId: 'p-proj' })).items.map((item) => item.identifier),
@@ -317,6 +324,16 @@ describe('YouTrack tracker provider', () => {
     expect((await read('items.list', { ...LIST, state: 'all', query: 'CSV' })).items.map((item) => item.identifier)).toEqual([
       'PROJ-2',
     ]);
+  });
+
+  test('uses common state names above the large-project cap', async () => {
+    const many = startFakeYouTrack({ generatedProjects: 39 });
+    try {
+      const listed = await read('items.list', { ...LIST, state: 'todo' }, many.origin);
+      expect(listed.items.map((item) => item.identifier)).toEqual(['PROJ-1', 'OPS-1']);
+    } finally {
+      await many.close();
+    }
   });
 
   test('builds a neutral item with state, priority, labels, assignee, container and comments', async () => {
@@ -480,6 +497,26 @@ describe('YouTrack tracker provider', () => {
       ok: false,
       error: { status: 404, message: expect.stringContaining('Unknown YouTrack project p-nope') },
     });
+  });
+
+  test('reads one project directly when the list leaves it out', async () => {
+    const hidden = startFakeYouTrack({ omitProjectFromList: 'p-proj' });
+    try {
+      const listed = await read('items.list', { ...LIST, containerId: 'p-proj' }, hidden.origin);
+      expect(listed.items.map((item) => item.identifier)).toEqual(['PROJ-1', 'PROJ-2']);
+    } finally {
+      await hidden.close();
+    }
+  });
+
+  test('keeps the list unscopeable when the project list fails', async () => {
+    const failing = startFakeYouTrack({ projectsStatus: 500 });
+    try {
+      const listed = await read('items.list', LIST, failing.origin);
+      expect(listed.items.map((item) => item.identifier)).toEqual(['PROJ-1', 'PROJ-2', 'OPS-1']);
+    } finally {
+      await failing.close();
+    }
   });
 
   test('answers null for a comment on an unknown issue', async () => {

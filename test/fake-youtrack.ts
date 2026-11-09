@@ -33,7 +33,6 @@ export type FakeProject = {
   id: string;
   name: string;
   shortName: string;
-  description?: string;
   states: FakeState[];
   leader?: { id: string; login: string };
   team?: { users: Array<{ id: string; login: string }>; allUsersGroup: boolean };
@@ -63,10 +62,14 @@ export type FakeYouTrackOptions = {
   extraIssues?: FakeIssueSpec[];
   /** `GENERATED-n` issues in PROJ, for paging. */
   generatedIssues?: number;
+  /** Extra projects, to exercise the large-project state fallback. */
+  generatedProjects?: number;
   /** Override `/api/config`, the probe's answer. */
   config?: { status?: number; body: string };
   /** The project-list endpoint answers this status instead. */
   projectsStatus?: number;
+  /** Leave one project out of the list while the direct project read still answers it. */
+  omitProjectFromList?: string;
   /** Add a project with no team data, so its access is unknown. */
   withTeamlessProject?: boolean;
   /** Add EXAMPLE with the folder-mapping JSON in its description. */
@@ -126,7 +129,6 @@ const baseProjects = (options: FakeYouTrackOptions): FakeProject[] => {
       id: 'p-proj',
       name: 'Probe Project',
       shortName: 'PROJ',
-      description: 'The project this provider is built for.',
       states: STATES.map(clone),
       leader: { id: 'u-1', login: 'mona' },
       team: { users: [{ id: 'u-1', login: 'mona' }], allUsersGroup: false },
@@ -135,7 +137,6 @@ const baseProjects = (options: FakeYouTrackOptions): FakeProject[] => {
       id: 'p-ops',
       name: 'Operations',
       shortName: 'OPS',
-      description: 'openchamber-project: acme/operations-repo',
       states: STATES.map(clone),
       team: { users: [{ id: 'u-2', login: 'alex' }], allUsersGroup: options.everyoneGroup === true },
     },
@@ -145,7 +146,6 @@ const baseProjects = (options: FakeYouTrackOptions): FakeProject[] => {
       id: 'p-mystery',
       name: 'Mystery Project',
       shortName: 'MYST',
-      description: 'No team is listed for this project.',
       states: STATES.map(clone),
     });
   }
@@ -154,8 +154,16 @@ const baseProjects = (options: FakeYouTrackOptions): FakeProject[] => {
       id: 'p-example',
       name: 'Example Project',
       shortName: 'EXAMPLE',
-      description: 'Folder metadata lives on the mapping issue.',
       states: STATES.map(clone),
+    });
+  }
+  for (let index = 1; index <= (options.generatedProjects ?? 0); index += 1) {
+    projects.push({
+      id: `p-gen-${index}`,
+      name: `Generated ${index}`,
+      shortName: `GEN${index}`,
+      states: STATES.map(clone),
+      team: { users: [], allUsersGroup: true },
     });
   }
   return projects;
@@ -406,15 +414,29 @@ export const startFakeYouTrack = (options: FakeYouTrackOptions = {}): FakeYouTra
         projectReads += 1;
         if (options.projectsStatus) return json({ error: 'server error' }, options.projectsStatus);
         return json(
-          projects.map(({ id, name, shortName, description, leader, team }) => ({
-            id,
-            name,
-            shortName,
-            description,
-            leader,
-            team,
-          })),
+          projects
+            .filter((project) => project.id !== options.omitProjectFromList)
+            .map(({ id, name, shortName, leader, team }) => ({
+              id,
+              name,
+              shortName,
+              leader,
+              team,
+            })),
         );
+      }
+
+      const directProject = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)$/);
+      if (directProject && request.method === 'GET') {
+        const project = projects.find((entry) => entry.id === directProject[1]);
+        if (!project) return json({ error: 'Not found' }, 404);
+        return json({
+          id: project.id,
+          name: project.name,
+          shortName: project.shortName,
+          leader: project.leader,
+          team: project.team,
+        });
       }
 
       const projectFields = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)\/customFields$/);
