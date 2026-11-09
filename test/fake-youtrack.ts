@@ -264,6 +264,8 @@ export type FakeYouTrack = {
   projects: FakeProject[];
   /** Every query string the provider sent to the command API. */
   commandQueries: string[];
+  /** How many times the provider read the whole project list. */
+  projectReads: number;
 };
 
 export const startFakeYouTrack = (options: FakeYouTrackOptions = {}): FakeYouTrack => {
@@ -275,6 +277,7 @@ export const startFakeYouTrack = (options: FakeYouTrackOptions = {}): FakeYouTra
     ...Array.from({ length: options.generatedIssues ?? 0 }, (_, index) => generatedIssue(index + 1)),
   ];
   const commandQueries: string[] = [];
+  let projectReads = 0;
 
   const findIssue = (idOrKey: string): FakeIssue | undefined => issues.find(
     (issue) => issue.id === idOrKey || issue.idReadable.toLowerCase() === idOrKey.toLowerCase(),
@@ -400,6 +403,7 @@ export const startFakeYouTrack = (options: FakeYouTrackOptions = {}): FakeYouTra
       }
 
       if (url.pathname === '/api/admin/projects' && request.method === 'GET') {
+        projectReads += 1;
         if (options.projectsStatus) return json({ error: 'server error' }, options.projectsStatus);
         return json(
           projects.map(({ id, name, shortName, description, leader, team }) => ({
@@ -496,5 +500,6 @@ export const startFakeYouTrack = (options: FakeYouTrackOptions = {}): FakeYouTra
     issues,
     projects,
     commandQueries,
+    get projectReads() { return projectReads; },
   };
 };

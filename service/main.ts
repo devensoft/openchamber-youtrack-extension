@@ -86,7 +86,11 @@ const outbound = createTrackerOutbound({ env: process.env });
 const PAGE_SIZE = 40;
 
 /** Who a call is for: the server it reaches and the handle that reaches it. */
-type Call = { instance: string; handle: string };
+type Call = { instance: string; handle: string; accountId: string };
+
+/** Cache scope: the server and the account, never the server alone. */
+const cacheKey = (call: Call, ...parts: string[]): string =>
+  [call.instance, call.accountId, ...parts].join('\u0000');
 
 /** A failed call, answered as `{ ok: false, error }` with this status. */
 class CallError extends Error {
@@ -191,43 +195,45 @@ const readProjects = async (call: Call): Promise<TrackerProviderContainer[]> => 
 };
 
 const loadProjects = async (call: Call): Promise<TrackerProviderContainer[]> => {
-  const cached = PROJECTS_CACHE.get(call.instance);
+  const key = cacheKey(call);
+  const cached = PROJECTS_CACHE.get(key);
   if (cached && Date.now() - cached.at < cached.ttl) return cached.projects;
 
-  const inflight = PROJECTS_INFLIGHT.get(call.instance);
+  const inflight = PROJECTS_INFLIGHT.get(key);
   if (inflight) return inflight;
 
   const request = (async () => {
     try {
       const all = await readProjects(call);
-      PROJECTS_CACHE.set(call.instance, { at: Date.now(), ttl: PROJECTS_TTL_MS, projects: all });
-      ALL_CONTAINERS.set(call.instance, all);
+      PROJECTS_CACHE.set(key, { at: Date.now(), ttl: PROJECTS_TTL_MS, projects: all });
+      ALL_CONTAINERS.set(key, all);
       return all;
     } catch (error) {
       console.error(
         `[youtrack] could not read the project list: ${error instanceof Error ? error.message : String(error)}`,
       );
-      const fallback = PROJECTS_CACHE.get(call.instance)?.projects
-        ?? ALL_CONTAINERS.get(call.instance)
+      const fallback = PROJECTS_CACHE.get(key)?.projects
+        ?? ALL_CONTAINERS.get(key)
         ?? [];
-      PROJECTS_CACHE.set(call.instance, { at: Date.now(), ttl: PROJECTS_RETRY_MS, projects: fallback });
+      PROJECTS_CACHE.set(key, { at: Date.now(), ttl: PROJECTS_RETRY_MS, projects: fallback });
       return fallback;
     } finally {
-      PROJECTS_INFLIGHT.delete(call.instance);
+      PROJECTS_INFLIGHT.delete(key);
     }
   })();
-  PROJECTS_INFLIGHT.set(call.instance, request);
+  PROJECTS_INFLIGHT.set(key, request);
   return request;
 };
 
 const loadContainers = async (call: Call): Promise<TrackerProviderContainer[]> => loadProjects(call);
 
 const containerFilterQuery = async (call: Call, containerId: string): Promise<string> => {
-  const known = ALL_CONTAINERS.get(call.instance) ?? [];
+  const key = cacheKey(call);
+  const known = ALL_CONTAINERS.get(key) ?? [];
   let container = known.find((entry) => entry.id === containerId);
   if (!container) {
     await loadProjects(call);
-    container = (ALL_CONTAINERS.get(call.instance) ?? []).find((entry) => entry.id === containerId);
+    container = (ALL_CONTAINERS.get(key) ?? []).find((entry) => entry.id === containerId);
   }
   if (container) return `project: ${quoteTerm(container.key ?? container.name)}`;
 
@@ -327,7 +333,7 @@ const issueMappingOf = async (
   hints: readonly MappingHint[],
 ): Promise<IssueMapping | null> => {
   if (hints.length === 0) return null;
-  const key = `${call.instance}\u0000${directory ?? ''}\u0000${projectName ?? ''}`;
+  const key = cacheKey(call, directory ?? '', projectName ?? '');
   const cached = ISSUE_MAPPING_CACHE.get(key);
   if (cached && Date.now() - cached.at < ISSUE_MAPPING_TTL_MS) return cached.value;
 
@@ -376,8 +382,8 @@ const issueMappingOf = async (
 const STATE_NAMES_CACHE = new Map<string, TrackerProviderWorkflowState[]>();
 
 const loadStates = async (call: Call, containerId: string): Promise<TrackerProviderWorkflowState[]> => {
-  const cacheKey = `${call.instance}\u0000${containerId}`;
-  const cached = STATE_NAMES_CACHE.get(cacheKey);
+  const stateKey = cacheKey(call, containerId);
+  const cached = STATE_NAMES_CACHE.get(stateKey);
   if (cached) return cached;
 
   // The project-fields endpoint is the precise answer, but it is an admin
@@ -397,7 +403,7 @@ const loadStates = async (call: Call, containerId: string): Promise<TrackerProvi
   }
 
   if (states.length === 0) states = await observedStates(call, containerId);
-  STATE_NAMES_CACHE.set(cacheKey, states);
+  STATE_NAMES_CACHE.set(stateKey, states);
   return states;
 };
 
@@ -802,7 +808,11 @@ const server = http.createServer((req, res) => {
     }
     send(res, 200, await answer(
       request.method,
-      { instance: request.session.instance, handle: request.session.handle },
+      {
+        instance: request.session.instance,
+        handle: request.session.handle,
+        accountId: request.session.account?.id ?? '',
+      },
       request.input,
     ));
   }).catch(() => send(res, 500, { error: 'could not read the request' }));

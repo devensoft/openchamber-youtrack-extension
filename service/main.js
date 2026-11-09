@@ -597,6 +597,7 @@ if (!port || !serviceToken) {
 }
 var outbound = createTrackerOutbound({ env: process.env });
 var PAGE_SIZE = 40;
+var cacheKey = (call, ...parts) => [call.instance, call.accountId, ...parts].join("\x00");
 
 class CallError extends Error {
   status;
@@ -675,37 +676,39 @@ var readProjects = async (call) => {
   return [...projects.values()].map(toContainer);
 };
 var loadProjects = async (call) => {
-  const cached = PROJECTS_CACHE.get(call.instance);
+  const key = cacheKey(call);
+  const cached = PROJECTS_CACHE.get(key);
   if (cached && Date.now() - cached.at < cached.ttl)
     return cached.projects;
-  const inflight = PROJECTS_INFLIGHT.get(call.instance);
+  const inflight = PROJECTS_INFLIGHT.get(key);
   if (inflight)
     return inflight;
   const request = (async () => {
     try {
       const all = await readProjects(call);
-      PROJECTS_CACHE.set(call.instance, { at: Date.now(), ttl: PROJECTS_TTL_MS, projects: all });
-      ALL_CONTAINERS.set(call.instance, all);
+      PROJECTS_CACHE.set(key, { at: Date.now(), ttl: PROJECTS_TTL_MS, projects: all });
+      ALL_CONTAINERS.set(key, all);
       return all;
     } catch (error) {
       console.error(`[youtrack] could not read the project list: ${error instanceof Error ? error.message : String(error)}`);
-      const fallback = PROJECTS_CACHE.get(call.instance)?.projects ?? ALL_CONTAINERS.get(call.instance) ?? [];
-      PROJECTS_CACHE.set(call.instance, { at: Date.now(), ttl: PROJECTS_RETRY_MS, projects: fallback });
+      const fallback = PROJECTS_CACHE.get(key)?.projects ?? ALL_CONTAINERS.get(key) ?? [];
+      PROJECTS_CACHE.set(key, { at: Date.now(), ttl: PROJECTS_RETRY_MS, projects: fallback });
       return fallback;
     } finally {
-      PROJECTS_INFLIGHT.delete(call.instance);
+      PROJECTS_INFLIGHT.delete(key);
     }
   })();
-  PROJECTS_INFLIGHT.set(call.instance, request);
+  PROJECTS_INFLIGHT.set(key, request);
   return request;
 };
 var loadContainers = async (call) => loadProjects(call);
 var containerFilterQuery = async (call, containerId) => {
-  const known = ALL_CONTAINERS.get(call.instance) ?? [];
+  const key = cacheKey(call);
+  const known = ALL_CONTAINERS.get(key) ?? [];
   let container = known.find((entry) => entry.id === containerId);
   if (!container) {
     await loadProjects(call);
-    container = (ALL_CONTAINERS.get(call.instance) ?? []).find((entry) => entry.id === containerId);
+    container = (ALL_CONTAINERS.get(key) ?? []).find((entry) => entry.id === containerId);
   }
   if (container)
     return `project: ${quoteTerm(container.key ?? container.name)}`;
@@ -769,7 +772,7 @@ var ISSUE_MAPPING_CACHE = new Map;
 var issueMappingOf = async (call, directory, projectName, hints) => {
   if (hints.length === 0)
     return null;
-  const key = `${call.instance}\x00${directory ?? ""}\x00${projectName ?? ""}`;
+  const key = cacheKey(call, directory ?? "", projectName ?? "");
   const cached = ISSUE_MAPPING_CACHE.get(key);
   if (cached && Date.now() - cached.at < ISSUE_MAPPING_TTL_MS)
     return cached.value;
@@ -809,8 +812,8 @@ var issueMappingOf = async (call, directory, projectName, hints) => {
 };
 var STATE_NAMES_CACHE = new Map;
 var loadStates = async (call, containerId) => {
-  const cacheKey = `${call.instance}\x00${containerId}`;
-  const cached = STATE_NAMES_CACHE.get(cacheKey);
+  const stateKey = cacheKey(call, containerId);
+  const cached = STATE_NAMES_CACHE.get(stateKey);
   if (cached)
     return cached;
   let states = [];
@@ -824,7 +827,7 @@ var loadStates = async (call, containerId) => {
   }
   if (states.length === 0)
     states = await observedStates(call, containerId);
-  STATE_NAMES_CACHE.set(cacheKey, states);
+  STATE_NAMES_CACHE.set(stateKey, states);
   return states;
 };
 var observedStates = async (call, containerId) => {
@@ -1086,7 +1089,11 @@ var server = http.createServer((req, res) => {
       send(res, 400, { error: "not a tracker call this service understands" });
       return;
     }
-    send(res, 200, await answer(request.method, { instance: request.session.instance, handle: request.session.handle }, request.input));
+    send(res, 200, await answer(request.method, {
+      instance: request.session.instance,
+      handle: request.session.handle,
+      accountId: request.session.account?.id ?? ""
+    }, request.input));
   }).catch(() => send(res, 500, { error: "could not read the request" }));
 });
 server.listen(port, "127.0.0.1");

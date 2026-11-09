@@ -209,6 +209,19 @@ describe('YouTrack tracker provider', () => {
     expect(containers.map((container) => container.key)).toEqual(expect.arrayContaining(['PROJ', 'OPS']));
   });
 
+  test('keeps the project cache per account', async () => {
+    await read('items.list', LIST);
+    const before = tracker.projectReads;
+
+    await call('items.list', {
+      token: 'demo',
+      account: { id: 'u-2', login: 'second' },
+      input: LIST,
+    });
+
+    expect(tracker.projectReads).toBe(before + 1);
+  });
+
   test('scopes an items list to the issue JSON of the open folder', async () => {
     const mapped = startFakeYouTrack({ mappingProject: true });
     const gitFolder = mkdtempSync(join(tmpdir(), 'openchamber-git-'));

@@ -104,6 +104,11 @@ bun run bump patch|minor|major
   `git -C <folder> remote get-url origin` (then the first remote), cached for
   five minutes. The folder basename, the native project name, the git remote
   URL and the repo name are the search identities.
+- A tracker service is not sent a disconnect event. Every call carries
+  `session.account`; key project lists, workflow states and issue mappings by
+  that account as well as the instance. When an account is removed, the host
+  simply stops calling, and the next account must not inherit the previous
+  account's cache.
 - The mapping convention is read from **issue descriptions**: the service
   searches issues for those identities, parses the matched issue's fenced
   JSON, uses that issue's project as the `items.list` scope and keeps only the
