@@ -1,26 +1,32 @@
 # YouTrack tracker for OpenChamber
 
 A YouTrack tracker provider for OpenChamber. It is a pure tracker: there is no
-rail panel and no project-selection state in the extension.
+rail panel and no project-selection state in the extension. Requires OpenChamber
+2.7 or newer.
 
 ## Install
 
 1. Open **Settings → Extensions** in OpenChamber.
 2. Add this repository's Git URL.
-3. Approve **Run a local service** and **Acts as the tracker**.
-4. Open **Settings → Extension accounts → YouTrack**, enter the server
-   address, and connect a permanent token with the **YouTrack** scope.
+3. Approve the local service, the tracker role, and the `git` command it uses.
+4. Open **Settings → Integrations → Extension accounts → YouTrack**, enter the
+   server address, and connect a permanent token with the **YouTrack** scope.
 5. Map YouTrack projects to OpenChamber projects under **Settings →
    Integrations** (native project mapping).
 6. Open **Issues and PRs** or the composer's **Link YouTrack Issue** picker.
 
 ## Repository mapping
 
-A native project passes its folder (and optionally its project name) to the
-tracker. The service reads the folder's git remote, searches YouTrack issues
-for that repository, and uses the issue whose description carries the matching
-JSON as the source of truth. The list is scoped to that issue's YouTrack
-project and filtered to the issues whose description names the repository.
+A host that supports repository scoping passes the native project's folder
+(and optionally its project name) to the tracker. The service reads the
+folder's git remote, searches YouTrack issues for that repository, and uses the
+issue whose description carries the matching JSON as the source of truth. The
+list is scoped to that issue's YouTrack project and filtered to the issues
+whose description names the repository.
+
+The stock OpenChamber 2.7 tracker contract does not carry that folder yet. On
+such a host the tracker still lists work, but cannot narrow it to a repository
+until the host passes the directory.
 
 Put the JSON in the description of an issue in the YouTrack project, as a
 fenced block with an optional language tag:

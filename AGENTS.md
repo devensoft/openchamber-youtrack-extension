@@ -6,7 +6,7 @@ Guidance for coding agents working in this repository.
 
 An OpenChamber **tracker provider** for YouTrack. The repository root is the
 installable extension: `package.json` carries both npm metadata and the
-OpenChamber manifest under `openchamber`. Version 0.1.0 implements the
+OpenChamber manifest under `openchamber`. Version 0.2.0 implements the
 provider (read, attach, state update, comments, live summaries) and uses
 OpenChamber's native project mapping. There is no extension panel.
 
@@ -43,18 +43,20 @@ bun run bump patch|minor|major
   Any change under `service/` must be followed by `bun run build`, and
   `service/main.js` must be committed in the same change. Never hand-edit the
   bundle. There is no panel bundle.
-- **Pin the SDK.** `@openchamber/sdk` is pinned exactly (`2.6.1`); the manifest
-  targets OpenChamber `>=2.6.0`. Bump deliberately and rerun the provider tests.
+- **Pin the SDK.** `@openchamber/sdk` is pinned exactly (`2.7.0`); the manifest
+  targets OpenChamber `>=2.7.0`. Bump deliberately and rerun the provider tests.
 - **Keep the manifest valid.** `bun run test` parses `package.json` with
   `parseManifestJson` from `@openchamber/sdk/schemas`. `service.provides:
-  ["tracker"]` and `contributes.tracker` come together, and `panel.id` must be
-  ≤ 28 characters because the provider id is `ext-<panel.id>`.
+  ["tracker"]` and `contributes.tracker` come together, and the top-level `id`
+  must be ≤ 28 characters because the provider id is `ext-<id>`.
+- **Name the programs.** The service runs `git` to read a folder's remote, so
+  `service.permissions.exec` lists `git` for the approval dialog.
 - **The token is OpenChamber's.** Never store a tracker token in
   `host.storage`, the service, or a file. The service gets a per-call handle;
   use `createTrackerOutbound`. Never store a handle.
 - **The service is the only YouTrack egress.** No panel, no second credential,
   no direct network path. The tracker account card is under **Settings →
-  Extension accounts**, not the Integrations catalog.
+  Integrations → Extension accounts**, not the Integrations catalog.
 - **No `items.create`.** The nine calls are seven reads plus two writes; issue
   creation needs a custom panel and a separate credential. Do not promise it as
   part of the provider.
@@ -77,10 +79,11 @@ bun run bump patch|minor|major
 - **Native project mapping** — `capabilities.projectMapping` is on. Settings →
   Integrations maps YouTrack containers to OpenChamber projects, and the
   board's container picker uses that mapping. The extension draws no panel.
-- **Native project directory** — the host passes the open project's `directory`
-  (or `projectPath`) and optionally `projectName` on `items.list` /
-  `containers.list`. The service uses that folder; there is no rail panel, no
-  `/projects` route and no panel state.
+- **Native project directory** — a host that supports repository scoping
+  passes the open project's `directory` (or `projectPath`) and optionally
+  `projectName` on `items.list` / `containers.list`. The service uses that
+  folder; there is no rail panel, no `/projects` route and no panel state. The
+  stock 2.7 tracker contract does not carry the folder yet.
 
 ## Conventions
 
