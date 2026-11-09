@@ -7,10 +7,11 @@
  * shapes. It never sees a credential: every request goes through OpenChamber's
  * outbound proxy with the call's handle.
  *
- * There is no rail panel. A native project passes its `directory` (and
- * optionally its project name) on `items.list`/`containers.list`; the service
- * reads that folder's git remote, finds the issue whose description carries
- * the matching fenced JSON, and scopes the list to that issue's project.
+ * There is no rail panel. A host that supports repository scoping passes the
+ * project's `directory` (and optionally its name) on
+ * `items.list`/`containers.list`; the service reads that folder's git remote,
+ * finds the issue whose description carries the matching fenced JSON, and
+ * scopes the list to that issue's project.
  */
 import http from 'node:http';
 import { execFile } from 'node:child_process';

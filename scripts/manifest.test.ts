@@ -9,10 +9,13 @@ test("package.json is a valid OpenChamber manifest", async () => {
     throw new Error(`Invalid manifest (${result.code}): ${result.message}`);
   }
 
+  expect(result.manifest.contributes.panel?.id).toBe("youtrack");
   expect(result.manifest.contributes.panel?.name).toBe("YouTrack");
+  expect(result.manifest.contributes.panel?.icon).toBe("icon.svg");
   // Native projects/mapping only: no rail panel page, no sessions capability.
   expect(result.manifest.contributes.panel?.entry).toBeUndefined();
   expect(result.manifest.contributes.capabilities).toBeUndefined();
   expect(result.manifest.contributes.tracker?.label).toBe("YouTrack");
   expect(result.manifest.contributes.tracker?.capabilities.projectMapping).toBe(true);
+  expect(result.manifest.contributes.service?.permissions?.exec).toContain("git");
 });

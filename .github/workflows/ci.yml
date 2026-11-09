@@ -31,3 +31,6 @@ jobs:
 
       - name: Check the committed bundle is current
         run: bun run verify
+
+      - name: Check the extension package
+        run: bunx openchamber-guest-check

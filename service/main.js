@@ -1,1 +1,1092 @@
-import Gt from"node:http";import{execFile as bt}from"node:child_process";import{basename as Dt,isAbsolute as wt}from"node:path";function be(e){let t=e.documentElement;if(t.hasAttribute("data-oc-scrollbar-activity"))return;t.setAttribute("data-oc-scrollbar-activity","");let r=new WeakMap;e.addEventListener("scroll",(n)=>{let o=n.target===e?t:n.target;if(!(o instanceof Element))return;if(!o.hasAttribute("data-oc-scrolling"))o.setAttribute("data-oc-scrolling","");let s=r.get(o);if(s!==void 0)clearTimeout(s);r.set(o,setTimeout(()=>{r.delete(o),o.removeAttribute("data-oc-scrolling")},1000))},{capture:!0,passive:!0})}var De=`(${be.toString()})(document);`;var q=["{id}","{segment}","{segments+}"];var _r=new Set(q);var Z=["turn-finished","turn-failed","permission-asked","question-asked"];var lr=new Set(Z);var re=["file","directory","other","missing"];var ne=["HOST_UNAVAILABLE","HOST_TIMEOUT","HOST_REJECTED","DISCONNECTED","DISABLED","BAD_PATH","NO_INTEGRATION","NO_SERVICE","SERVICE_FAILED","REQUEST_FAILED","RESPONSE_TOO_LARGE","NO_SESSION","SESSION_BUSY","NOT_GRANTED","NO_DIRECTORY","NOT_FOUND","FILE_TOO_LARGE","DENIED","NO_MODEL","MODEL_FAILED","UNSUPPORTED"],oe=["stopped","starting","ready","failed"],pr=new Set(ne);var Or=new Set(oe);var Rr=new Set(re);var se=["browser.open","browser.snapshot","browser.click","browser.type","browser.select","browser.scroll","browser.back","browser.forward","browser.inspect","browser.capture","browser.resize","browser.close"];var Pr=new Set(se);var ft=async(e,t,r,n,o)=>{let s;try{s=await fetch(e,{method:"POST",headers:{authorization:`Bearer ${t}`,"content-type":"application/json"},body:JSON.stringify(r),signal:AbortSignal.timeout(n+5000)})}catch(a){throw o(`OpenChamber did not answer: ${a instanceof Error?a.message:String(a)}`,"HOST_UNAVAILABLE",0)}let i;try{i=Object(await s.json())}catch{throw o("OpenChamber answered with something other than JSON","HOST_UNAVAILABLE",s.status)}if(!s.ok){let a=i.error?.message,_=i.error?.code;throw o(String(a)===a&&a.length>0?a:`OpenChamber refused the request (${s.status})`,String(_)===_&&_.length>0?_:"OUTBOUND_REFUSED",s.status)}if(!Number.isSafeInteger(i.status)||String(i.body)!==i.body)throw o("OpenChamber relayed a malformed answer","HOST_UNAVAILABLE",s.status);let c={};for(let[a,_]of Object.entries(Object(i.headers??{})))if(String(_)===_)c[a]=_;return{status:Number(i.status),headers:c,body:i.body}};var mt=(e)=>{if(e===null)return null;if(Object(e)!==e||e===void 0)return;let{id:t,login:r}=e;if(String(t)!==t||t.length===0)return;if(r!==null&&(String(r)!==r||r.length===0))return;return{id:t,login:r}};var w="/tracker",D=1,ie=["auth.probe","auth.verify","items.list","items.get","items.updateState","items.liveSummaries","states.list","containers.list","comments.create"];var k=2000;var ae="/tracker/outbound",ce=20000;var _e=(e)=>ie.some((t)=>t===e),v=(e)=>{let t;try{let E=JSON.parse(e);if(Object(E)!==E||E===null)return null;t=E}catch{return null}let{v:r,requestId:n,method:o,provider:s,session:i,input:c}=t;if(r!==D)return null;if(String(n)!==n||n.length===0)return null;if(String(s)!==s||s.length===0)return null;if(String(o)!==o||!_e(o))return null;if(Object(c)!==c||Array.isArray(c))return null;if(Object(i)!==i||i===null||i===void 0)return null;let{instance:a,handle:_}=i;if(String(a)!==a||a.length===0||String(_)!==_||_.length===0)return null;let u=mt(i.account);if(u===void 0)return null;return{v:D,requestId:n,method:o,provider:s,session:{instance:a,handle:_,account:u},input:c}};class m extends Error{code;status;constructor(e,t,r){super(e);this.name="TrackerOutboundError",this.code=t,this.status=r}}var F=({env:e})=>{let t=e.OPENCHAMBER_HOST_CALLBACK_URL;if(!t)throw Error(`OPENCHAMBER_HOST_CALLBACK_URL is not set: only a service that provides "tracker" can reach a tracker's server.`);let r=`${t.replace(/\/+$/,"")}${ae}`;return{request:(n,o)=>ft(r,n,o,ce,(s,i,c)=>new m(s,i,c))}};var Ee=["none","agent","user"];var Lr=new Set(Ee);var le=(e)=>e.normalize("NFD").replace(/\p{M}/gu,"").toLowerCase().replace(/[^a-z0-9]/g,""),It=(e)=>e.replace(/\/+$/,"").replace(/\.git$/i,""),ue=(e)=>{let t=e.trim();if(!t)return null;let r=/^[^@\s]+@[^:\s]+:(.+)$/.exec(t);if(r)t=r[1]??"";else{if(/^[a-z][a-z0-9+.-]*:\/\//i.test(t))try{t=new URL(t).pathname}catch{}t=t.replace(/^\/+/,"");let o=/^[a-z0-9.-]+\.[a-z]{2,}\/(.+)$/i.exec(t);if(o)t=o[1]??t}let n=It(t).split(/[\\/]+/).filter((o)=>o.length>0);if(n.length===0)return null;return n.length>=2?`${n[n.length-2]}/${n[n.length-1]}`:n[0]??null},C=(e)=>{let t=ue(e);if(!t)return null;return t.split("/").pop()??t},Te=(e)=>{let t=e.trim();if(!t)return[];let r=[t];for(let n of[ue(t),C(t)])if(n&&!r.includes(n))r.push(n);return r},Ut=new Set(["ocprojectname","githuburl","repourl","repositoryurl","gitremote","giturl","remoteurl","remote","reponame","repositoryname","projectname","project","repo","repository","youtrackproject","youtrackprojectkey","youtrackprojectid"]),ht=/```[^\n]*\r?\n([\s\S]*?)```/g,X=(e,t)=>{if(Array.isArray(e)){for(let r of e)X(r,t);return}if(!e||typeof e!=="object")return;for(let[r,n]of Object.entries(e)){if(Ut.has(r.toLowerCase())){if(typeof n==="string"&&n.trim())t.push(n.trim());if(Array.isArray(n)){for(let o of n)if(typeof o==="string"&&o.trim())t.push(o.trim())}continue}X(n,t)}},Ct=(e)=>{let t=[],r=[...e.matchAll(ht)].flatMap((o)=>o[1]?[o[1]]:[]),n=e.trim();if(n.startsWith("{")||n.startsWith("["))r.push(n);for(let o of r)try{X(JSON.parse(o),t)}catch{}return t},Nt=(e)=>{if(!e)return[];return[...new Set(Ct(e))]},H=(e,t)=>{let r=[...new Set(t.flatMap(Te))].map(le);if(r.length===0)return!1;let n=Nt(e).flatMap(Te).map(le);return r.some((o)=>n.includes(o))};var I=(e)=>/\s/.test(e)?`{${e}}`:e,Se=(e,t)=>`${e}: ${t.map(I).join(", ")}`,V=(e)=>{let t=e.map((r)=>r.key??r.name).filter((r)=>Boolean(r));if(t.length===0)return null;return`project: ${t.map(I).join(", ")}`},yt={urgent:["Show-stopper","Critical","Blocker"],high:["Major","High"],medium:["Normal","Medium"],low:["Minor","Low"]},de=(e)=>{if(e==="all"||e==="none")return null;let t=yt[e];if(!t)return null;return Se("Priority",t)},pe=(e)=>{if(e==="me")return"for: me";if(e==="created")return"created by: me";return null},N=(e)=>e.length===0?null:Se("State",e),y=(e)=>e==="canceled"?"#Resolved":"#Unresolved";var R=["id","idReadable","summary","description","created","updated","resolved","project(id,name,shortName)","tags(id,name,color(id))","customFields(name,value(id,name,isResolved,login,fullName,avatarUrl))"].join(","),B=`${R},comments(id,text,created,author(id,login,name,fullName,avatarUrl))`,Re=(e)=>typeof e==="number"&&Number.isFinite(e)?new Date(e).toISOString():null,j=(e,t)=>{if(!t)return null;if(/^https?:\/\//i.test(t))return t;return`${e}${t.startsWith("/")?"":"/"}${t}`},Mt=(e)=>{if(Array.isArray(e))return e[0]??null;return e??null},Oe=(e,t)=>{let r=e.customFields?.find((n)=>n.name.toLowerCase()===t.toLowerCase());return Mt(r?.value)},K=(e)=>Object(e)===e&&!Array.isArray(e)&&typeof e.isResolved==="boolean",U=(e)=>{for(let t of e.customFields??[]){let n=(Array.isArray(t.value)?t.value:[t.value]).find(K);if(n)return{name:t.name,value:n}}return{name:"State",value:null}},Y=(e,t)=>{let r=(e??"").trim().toLowerCase();if(/won'?t fix|cancel|duplicate|obsolete|rejected|declined|invalid/.test(r))return"canceled";if(t===!0)return"done";if(!r)return null;if(/backlog|icebox/.test(r))return"backlog";if(/triage|inbox/.test(r))return"triage";if(/in progress|in review|review|testing|\bqa\b|doing|started|in dev|development|implement|pending/.test(r))return"in-progress";if(/to ?do|todo|submitted|open|new|ready|approved/.test(r))return"todo";return"todo"},gt=["Triage","Inbox","Backlog","Icebox","Submitted","Open","New","Ready","Approved","To Do","In Progress","In Review","Review","Testing","QA","Doing","Started","In Development","Pending Deploy","Won't fix","Duplicate","Obsolete","Rejected","Declined","Invalid"],Ae=(e)=>gt.filter((t)=>Y(t,!1)===e),Pt={"show-stopper":"urgent",showstopper:"urgent",blocker:"urgent",critical:"urgent",highest:"urgent",major:"high",high:"high",normal:"medium",medium:"medium",minor:"low",low:"low",lowest:"low","no priority":"none",none:"none"},xt=(e)=>{if(!e)return"none";return Pt[e.trim().toLowerCase()]??"none"},fe=(e,t)=>{if(!t)return null;let r=("fullName"in t?t.fullName:void 0)??t.name??t.login??null;if(!r)return null;return{name:r,avatarUrl:j(e,t.avatarUrl)}},M=(e)=>({id:e.id,key:e.shortName??e.name??null,name:e.name??e.shortName??e.id}),g=(e,t)=>{let r=(t.idReadable??t.id).toUpperCase(),n=U(t),o=Oe(t,"priority"),s=Oe(t,"assignee");return{id:t.id,identifier:r,title:t.summary??r,url:`${e}/issue/${encodeURIComponent(r)}`,state:n.value?{id:n.value.id??null,name:n.value.name??"",category:Y(n.value.name,n.value.isResolved)}:null,priority:xt(o?.name),labels:(t.tags??[]).map((i)=>({id:i.id,name:i.name??i.id,color:i.color?.id??null})),assignee:fe(e,s),container:t.project?M(t.project):null,updatedAt:Re(t.updated)}},Lt=(e,t)=>({id:t.id,body:t.text??"",createdAt:Re(t.created),author:fe(e,t.author)}),P=(e,t)=>({...g(e,t),description:t.description??null,comments:(t.comments??[]).map((r)=>Lt(e,r))}),W=(e,t)=>({id:e.name??e.id??`state-${t}`,name:e.name??e.id??`State ${t}`,category:Y(e.name,e.isResolved),position:t}),me=(e,t)=>{let r=g(e,t);return{identifier:r.identifier,title:r.title,state:{name:r.state?.name??"Open",category:r.state?.category??"todo"}}};var Me=Number(process.env.OPENCHAMBER_SERVICE_PORT),ge=process.env.OPENCHAMBER_SERVICE_TOKEN??"";if(!Me||!ge)console.error("OPENCHAMBER_SERVICE_PORT and OPENCHAMBER_SERVICE_TOKEN are required"),process.exit(1);var Pe=F({env:process.env}),Ie=40;class S extends Error{status;constructor(e,t){super(e);this.status=t}}var kt=(e)=>{if(e.status===401)return new S("YouTrack refused the credential.",401);let t=`YouTrack answered ${e.status}.`;try{let r=JSON.parse(e.body),n=r.error_description??r.error??r.message;if(n)t=`YouTrack answered ${e.status}: ${n}`}catch{}return new S(t,e.status)},l=async(e,t,r,n={})=>{let o=await Pe.request(e.handle,{method:t,path:r,query:n.query,headers:n.body?{accept:"application/json","content-type":"application/json"}:{accept:"application/json"},body:n.body?JSON.stringify(n.body):void 0});if(o.status>=400)throw kt(o);try{return JSON.parse(o.body)}catch{throw new S("YouTrack answered with something other than JSON.",502)}},L=async(e)=>{try{return await e}catch(t){if(t instanceof S&&t.status===404)return null;throw t}},p=encodeURIComponent,A=(e,t)=>{if(!e||typeof e!=="object")return null;let r=e[t];return typeof r==="string"&&r.trim()?r.trim():null},vt=300000,Ft=30000,x=new Map,J=new Map,G=new Map,Xt=async(e)=>{let t=new Map;for(let r=0;r<5000;r+=100){let n=await l(e,"GET","/api/admin/projects",{query:{fields:"id,name,shortName",$top:"100",$skip:String(r)}});for(let o of n)if(o.id)t.set(o.id,o);if(n.length<100)break}return[...t.values()].map(M)},xe=async(e)=>{let t=x.get(e.instance);if(t&&Date.now()-t.at<t.ttl)return t.projects;let r=J.get(e.instance);if(r)return r;let n=(async()=>{try{let o=await Xt(e);return x.set(e.instance,{at:Date.now(),ttl:vt,projects:o}),G.set(e.instance,o),o}catch(o){console.error(`[youtrack] could not read the project list: ${o instanceof Error?o.message:String(o)}`);let s=x.get(e.instance)?.projects??G.get(e.instance)??[];return x.set(e.instance,{at:Date.now(),ttl:Ft,projects:s}),s}finally{J.delete(e.instance)}})();return J.set(e.instance,n),n},b=async(e)=>xe(e),Ht=async(e,t)=>{let n=(G.get(e.instance)??[]).find((o)=>o.id===t);if(!n)await xe(e),n=(G.get(e.instance)??[]).find((o)=>o.id===t);if(n)return`project: ${I(n.key??n.name)}`;try{let o=await L(l(e,"GET",`/api/admin/projects/${p(t)}`,{query:{fields:"id,name,shortName"}}));if(o)return`project: ${I(o.shortName??o.name??t)}`}catch(o){if(!(o instanceof S))throw o}throw new S(`Unknown YouTrack project ${t}.`,404)},Vt=300000,Ue=new Map,Bt=async(e)=>{if(!e||!wt(e)||e.includes("\x00"))return null;let t=Ue.get(e);if(t&&Date.now()-t.at<Vt)return t.value;let r=(s)=>new Promise((i,c)=>{bt("git",["-C",e,...s],{timeout:3000,maxBuffer:65536},(a,_)=>{if(a)c(a);else i(String(_).trim())})}),n="";try{n=await r(["remote","get-url","origin"])}catch{}if(!n)try{let s=(await r(["remote"])).split(/\r?\n/).map((i)=>i.trim()).filter(Boolean);if(s[0])n=await r(["remote","get-url",s[0]])}catch{}let o=n?{remote:n,repo:C(n)}:null;return Ue.set(e,{at:Date.now(),value:o}),o},he=async(e,t)=>{let r=[],n=e?Dt(e):"";if(n)r.push({value:n,source:"folder"});if(t)r.push({value:t,source:"name"});let o=await Bt(e);if(o?.remote)r.push({value:o.remote,source:"repo"});if(o?.repo)r.push({value:o.repo,source:"repo"});return r},jt=60000,Ce=new Map,Ne=async(e,t,r,n)=>{if(n.length===0)return null;let o=`${e.instance}\x00${t??""}\x00${r??""}`,s=Ce.get(o);if(s&&Date.now()-s.at<jt)return s.value;let i=n.map((E)=>E.value).filter(Boolean),c=[...new Set(n.map((E)=>C(E.value)??E.value.trim()).filter((E)=>E.length>=3))],a=new Map,_=new Set;for(let E of c)try{let d=await l(e,"GET","/api/issues",{query:{query:E,$top:"20",fields:"id,idReadable,project(id,shortName,name),description"}});for(let O of d){if(!O.project?.id)continue;if(!H(O.description,i))continue;a.set(O.project.id,M(O.project)),_.add(E)}}catch(d){if(d instanceof S&&(d.status===403||d.status===404))continue;throw d}let u={projects:[...a.values()],terms:[..._]};return Ce.set(o,{at:Date.now(),value:u}),u},ye=new Map,z=async(e,t)=>{let r=`${e.instance}\x00${t}`,n=ye.get(r);if(n)return n;let o=[];try{o=((await l(e,"GET",`/api/admin/projects/${p(t)}/customFields`,{query:{fields:"id,name,field(name),bundle(values(id,name,isResolved))"}})).find((c)=>(c.bundle?.values??[]).some(K))?.bundle?.values??[]).map((c,a)=>W(c,a))}catch(s){if(!(s instanceof S&&(s.status===403||s.status===404)))throw s}if(o.length===0)o=await $t(e,t);return ye.set(r,o),o},$t=async(e,t)=>{let r=(await b(e)).find((i)=>i.id===t);if(!r)return[];let n=r.key??r.name,o=await l(e,"GET","/api/issues",{query:{query:`project: ${/\s/.test(n)?`{${n}}`:n}`,$top:"100",fields:"id,customFields(name,value(id,name,isResolved))"}}),s=new Map;for(let i of o){let c=U(i).value;if(c?.name)s.set(c.name,c)}return[...s.values()].map((i,c)=>W(i,c))},Kt=40,Yt=async(e,t)=>{let r=[...t],n=[],o=Array.from({length:Math.min(6,r.length)},async()=>{for(;;){let s=r.shift();if(!s)return;try{n.push(...await z(e,s.id))}catch(i){console.error(`[youtrack] could not read the workflow of ${s.id}: ${i instanceof Error?i.message:String(i)}`)}}});return await Promise.all(o),n},Wt=async(e,t,r,n)=>{if(t==="all")return null;if(t==="open")return"#Unresolved";if(t==="done")return"#Resolved";let s=["triage","backlog","todo","in-progress","canceled"].find((_)=>_===t);if(!s)return"#Unresolved";if(r){let u=(await z(e,r)).filter((E)=>E.category===s).map((E)=>E.name);return N(u)??y(s)}let i=n??await b(e);if(i.length>Kt)return N(Ae(s))??y(s);let c=await Yt(e,i),a=[...new Set(c.filter((_)=>_.category===s).map((_)=>_.name))];return N(a)??y(s)},Jt={"auth.probe":async(e)=>{let t=await Pe.request(e.handle,{method:"GET",path:"/api/config",query:{fields:"version"},headers:{accept:"application/json"}});if(t.status!==200)return{supported:!1,message:`${e.instance} answered ${t.status} to /api/config.`};try{return typeof JSON.parse(t.body).version==="string"?{supported:!0}:{supported:!1,message:`${e.instance} does not look like a YouTrack server.`}}catch{return{supported:!1,message:`${e.instance} did not answer with JSON.`}}},"auth.verify":async(e)=>{let t=await l(e,"GET","/api/users/me",{query:{fields:"id,login,name,fullName,email,avatarUrl"}}),r={id:t.id??t.login??"me",login:t.login??null},n=t.fullName??t.name;if(n)r.name=n;let o=j(e.instance,t.avatarUrl);if(o)r.avatarUrl=o;return{account:r}},"items.list":async(e,t)=>{let r=Math.max(0,Number(t.cursor??"0")||0),n=[],o=A(t,"directory")??A(t,"projectPath"),s=A(t,"projectName"),i=await he(o,s),c=i.length>0?await Ne(e,o,s,i):null,a=!t.containerId&&c&&c.projects.length>0?c:null;if(t.containerId)n.push(await Ht(e,t.containerId));else if(a){let T=V(a.projects);if(T)n.push(T)}else{let T=V(await b(e));if(T)n.push(T)}let _=a?a.terms.find((T)=>!/\s/.test(T))??a.terms[0]??null:null;if(_)n.push(_);let u=await Wt(e,t.state,t.containerId,t.containerId?null:a?.projects??null);if(u)n.push(u);let E=pe(t.people);if(E)n.push(E);let d=de(t.priority);if(d)n.push(d);if(t.query?.trim())n.push(t.query.trim());let O={fields:R,$top:String(Ie),$skip:String(r)};if(n.length>0)O.query=n.join(" and ");let h=await l(e,"GET","/api/issues",{query:O}),Le=_&&i.length>0?h.filter((T)=>H(T.description,i.map((Ge)=>Ge.value))):h,Q=h.length>=Ie;return{items:Le.map((T)=>g(e.instance,T)),cursor:Q?String(r+h.length):null,hasMore:Q}},"items.get":async(e,t)=>{let r=await L(l(e,"GET",`/api/issues/${p(t.id)}`,{query:{fields:B}}));return{item:r?P(e.instance,r):null}},"items.updateState":async(e,t)=>{let r=await l(e,"GET",`/api/issues/${p(t.id)}`,{query:{fields:`id,idReadable,${R}`}}),n=U(r),o=await l(e,"POST",`/api/issues/${p(t.id)}`,{query:{fields:R},body:{customFields:[{name:n.name,value:{name:t.stateId}}]}});if(U(o).value?.name===t.stateId)return{item:P(e.instance,o)};await l(e,"POST","/api/commands",{query:{fields:"id"},body:{query:`${n.name} ${/\s/.test(t.stateId)?`{${t.stateId}}`:t.stateId}`,issues:[{idReadable:r.idReadable??t.id}]}});let s=await l(e,"GET",`/api/issues/${p(t.id)}`,{query:{fields:B}});return{item:P(e.instance,s)}},"items.liveSummaries":async(e,t)=>{let r=[],n=[...t.identifiers],o=Array.from({length:Math.min(5,n.length)},async()=>{for(;;){let s=n.shift();if(!s)return;let i=await L(l(e,"GET",`/api/issues/${p(s)}`,{query:{fields:R}}));if(i)r.push(me(e.instance,i))}});return await Promise.all(o),{items:r}},"states.list":async(e,t)=>({states:await z(e,t.containerId)}),"containers.list":async(e,t)=>{let r=A(t,"directory")??A(t,"projectPath"),n=A(t,"projectName");if(r||n)try{let o=await he(r,n);await Ne(e,r,n,o)}catch(o){console.error(`[youtrack] could not resolve the project mapping: ${o instanceof Error?o.message:String(o)}`)}return{containers:await b(e)}},"comments.create":async(e,t)=>{let r=await L(l(e,"POST",`/api/issues/${p(t.identifier)}/comments`,{query:{fields:"id,text"},body:{text:t.body}}));return{comment:r?{id:r.id}:null}}},zt=(e)=>{let t={message:e.message.slice(0,k)||"Unexpected failure"};if(e instanceof m){if(e.status>=400&&e.status<=599)t.status=e.status;if(/^[A-Z_]{1,64}$/.test(e.code))t.code=e.code}else if(e instanceof S)t.status=e.status;return t},Qt=async(e,t,r)=>{try{return{ok:!0,data:await Jt[e](t,r)}}catch(n){return{ok:!1,error:zt(n instanceof Error?n:Error(String(n)))}}},f=(e,t,r)=>{e.writeHead(t,{"Content-Type":"application/json"}),e.end(JSON.stringify(r))},qt=(e)=>new Promise((t,r)=>{let n="";e.on("data",(o)=>{n+=o}),e.on("end",()=>t(n)),e.on("error",r)}),Zt=Gt.createServer((e,t)=>{if(e.headers.authorization!==`Bearer ${ge}`){f(t,401,{error:"unauthorized"});return}let r=new URL(e.url??"/","http://127.0.0.1");if(r.pathname==="/health"){f(t,200,{ok:!0});return}if(r.pathname!==w||e.method!=="POST"){f(t,404,{error:"not-found"});return}qt(e).then(async(n)=>{let o=v(n);if(!o){f(t,400,{error:"not a tracker call this service understands"});return}f(t,200,await Qt(o.method,{instance:o.session.instance,handle:o.session.handle},o.input))}).catch(()=>f(t,500,{error:"could not read the request"}))});Zt.listen(Me,"127.0.0.1");
+// service/main.ts
+import http from "node:http";
+import { execFile } from "node:child_process";
+import { basename, isAbsolute } from "node:path";
+// node_modules/@openchamber/sdk/dist/scrollbar-style.js
+var GUEST_SCROLLING_ATTRIBUTE = "data-oc-scrolling";
+var GUEST_SCROLLBAR_CSS = `
+:root {
+  /* Quiet at rest like the app's own thumbs; hover gives a clear grab target. */
+  --oc-scrollbar-thumb: color-mix(in srgb, var(--oc-muted, currentColor) 18%, transparent);
+  --oc-scrollbar-thumb-hover: color-mix(in srgb, var(--oc-muted, currentColor) 36%, transparent);
+  scrollbar-gutter: stable;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+:hover, [${GUEST_SCROLLING_ATTRIBUTE}] {
+  scrollbar-color: var(--oc-scrollbar-thumb) transparent;
+}
+/* Chromium's standard scrollbar properties otherwise override its pseudo-elements. */
+@supports selector(::-webkit-scrollbar) {
+  *, :hover, [${GUEST_SCROLLING_ATTRIBUTE}] { scrollbar-width: auto; scrollbar-color: auto; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; background: transparent; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 999px;
+    min-width: 24px;
+    min-height: 24px;
+  }
+  :hover::-webkit-scrollbar-thumb, [${GUEST_SCROLLING_ATTRIBUTE}]::-webkit-scrollbar-thumb { background: var(--oc-scrollbar-thumb); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--oc-scrollbar-thumb-hover); }
+  ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+}
+@media (forced-colors: active) {
+  *, :hover, [${GUEST_SCROLLING_ATTRIBUTE}] { scrollbar-color: auto; }
+  ::-webkit-scrollbar-thumb, ::-webkit-scrollbar-thumb:hover { background: CanvasText; }
+}
+`;
+function installGuestScrollbarActivity(doc) {
+  const root = doc.documentElement;
+  if (root.hasAttribute("data-oc-scrollbar-activity"))
+    return;
+  root.setAttribute("data-oc-scrollbar-activity", "");
+  const timers = new WeakMap;
+  doc.addEventListener("scroll", (event) => {
+    const target = event.target === doc ? root : event.target;
+    if (!(target instanceof Element))
+      return;
+    if (!target.hasAttribute("data-oc-scrolling"))
+      target.setAttribute("data-oc-scrolling", "");
+    const pending = timers.get(target);
+    if (pending !== undefined)
+      clearTimeout(pending);
+    timers.set(target, setTimeout(() => {
+      timers.delete(target);
+      target.removeAttribute("data-oc-scrolling");
+    }, 1000));
+  }, { capture: true, passive: true });
+}
+var GUEST_SCROLLBAR_SCRIPT = `(${installGuestScrollbarActivity.toString()})(document);`;
+// node_modules/@openchamber/sdk/dist/manifest.js
+var TRACKER_URL_TOKENS = ["{id}", "{segment}", "{segments+}"];
+var TRACKER_URL_TOKEN_SET = new Set(TRACKER_URL_TOKENS);
+// node_modules/@openchamber/sdk/dist/session-events.js
+var GUEST_SESSION_EVENT_TYPES = [
+  "turn-finished",
+  "turn-failed",
+  "permission-asked",
+  "question-asked",
+  "turn-started",
+  "session-created",
+  "session-archived",
+  "session-deleted"
+];
+var SESSION_EVENTS_IDLE_MS = 10 * 60000;
+var EVENT_TYPES = new Set(GUEST_SESSION_EVENT_TYPES);
+// node_modules/@openchamber/sdk/dist/service-host.js
+var SERVICE_SCHEDULE_IDLE_MS = 10 * 60000;
+var MENTIONS_IDLE_MS = 10 * 60000;
+// node_modules/@openchamber/sdk/dist/file-editor.js
+var patternExpressions = new Map;
+// node_modules/@openchamber/sdk/dist/contract.js
+var GUEST_FILE_STAT_KINDS = ["file", "directory", "other", "missing"];
+var GUEST_GENERATE_LATE_KEEP_MS = 60 * 60000;
+var HOST_REQUEST_ERROR_CODES = [
+  "HOST_UNAVAILABLE",
+  "HOST_TIMEOUT",
+  "HOST_REJECTED",
+  "DISCONNECTED",
+  "DISABLED",
+  "BAD_PATH",
+  "NO_INTEGRATION",
+  "NO_SERVICE",
+  "SERVICE_FAILED",
+  "REQUEST_FAILED",
+  "RESPONSE_TOO_LARGE",
+  "NO_SESSION",
+  "SESSION_BUSY",
+  "NOT_GRANTED",
+  "NO_DIRECTORY",
+  "NOT_FOUND",
+  "FILE_TOO_LARGE",
+  "DENIED",
+  "NO_MODEL",
+  "MODEL_FAILED",
+  "UNSUPPORTED"
+];
+var SERVICE_STATUS_VALUES = ["stopped", "starting", "ready", "failed"];
+var hostRequestErrorCodeSet = new Set(HOST_REQUEST_ERROR_CODES);
+var serviceStatusSet = new Set(SERVICE_STATUS_VALUES);
+var fileStatKindSet = new Set(GUEST_FILE_STAT_KINDS);
+var HOST_PUSH_TYPES = new Set([
+  "workspace",
+  "shells",
+  "ready",
+  "directory",
+  "session",
+  "connection",
+  "settings",
+  "session-lifecycle",
+  "item",
+  "resolve",
+  "action",
+  "service-event",
+  "status-control-event",
+  "popover-closed",
+  "file-open",
+  "file-snapshot",
+  "file-saved",
+  "generate-late"
+]);
+// node_modules/@openchamber/sdk/dist/service-providers.js
+var BROWSER_CONTROL_ACTIONS = [
+  "browser.open",
+  "browser.snapshot",
+  "browser.click",
+  "browser.type",
+  "browser.select",
+  "browser.scroll",
+  "browser.back",
+  "browser.forward",
+  "browser.inspect",
+  "browser.capture",
+  "browser.resize",
+  "browser.close"
+];
+var BROWSER_PROVIDER_IDLE_MS = 10 * 60000;
+var CONTROL_ACTIONS = new Set(BROWSER_CONTROL_ACTIONS);
+var SOURCE_CONTROL_PROVIDER_IDLE_MS = 10 * 60000;
+var OPENCHAMBER_HOST_CALLBACK_URL = "OPENCHAMBER_HOST_CALLBACK_URL";
+var postOutbound = async (url, handle, request, timeoutMs, fail) => {
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${handle}`, "content-type": "application/json" },
+      body: JSON.stringify(request),
+      signal: AbortSignal.timeout(timeoutMs + 5000)
+    });
+  } catch (error) {
+    throw fail(`OpenChamber did not answer: ${error instanceof Error ? error.message : String(error)}`, "HOST_UNAVAILABLE", 0);
+  }
+  let answer;
+  try {
+    answer = Object(await response.json());
+  } catch {
+    throw fail("OpenChamber answered with something other than JSON", "HOST_UNAVAILABLE", response.status);
+  }
+  if (!response.ok) {
+    const message = answer.error?.message;
+    const code = answer.error?.code;
+    throw fail(String(message) === message && message.length > 0 ? message : `OpenChamber refused the request (${response.status})`, String(code) === code && code.length > 0 ? code : "OUTBOUND_REFUSED", response.status);
+  }
+  if (!Number.isSafeInteger(answer.status) || String(answer.body) !== answer.body) {
+    throw fail("OpenChamber relayed a malformed answer", "HOST_UNAVAILABLE", response.status);
+  }
+  const headers = {};
+  for (const [name, text] of Object.entries(Object(answer.headers ?? {}))) {
+    if (String(text) === text)
+      headers[name] = text;
+  }
+  return { status: Number(answer.status), headers, body: answer.body };
+};
+var NOTIFICATIONS_PROVIDER_IDLE_MS = 10 * 60000;
+var readNotificationsAccount = (account) => {
+  if (account === null)
+    return null;
+  if (Object(account) !== account || account === undefined)
+    return;
+  const { id, login } = account;
+  if (String(id) !== id || id.length === 0)
+    return;
+  if (login !== null && (String(login) !== login || login.length === 0))
+    return;
+  return { id, login };
+};
+var TRACKER_PROVIDER_PATH = "/tracker";
+var TRACKER_PROVIDER_WIRE_VERSION = 1;
+var TRACKER_PROVIDER_METHODS = [
+  "auth.probe",
+  "auth.verify",
+  "items.list",
+  "items.get",
+  "items.updateState",
+  "items.liveSummaries",
+  "states.list",
+  "containers.list",
+  "comments.create"
+];
+var TRACKER_PROVIDER_ERROR_MESSAGE_MAX = 2000;
+var TRACKER_PROVIDER_IDLE_MS = 10 * 60000;
+var TRACKER_OUTBOUND_PATH = "/tracker/outbound";
+var TRACKER_OUTBOUND_TIMEOUT_MS = 20000;
+var isTrackerProviderMethod = (value) => TRACKER_PROVIDER_METHODS.some((method) => method === value);
+var readTrackerProviderRequest = (body) => {
+  let wire;
+  try {
+    const parsed = JSON.parse(body);
+    if (Object(parsed) !== parsed || parsed === null)
+      return null;
+    wire = parsed;
+  } catch {
+    return null;
+  }
+  const { v, requestId, method, provider, session, input } = wire;
+  if (v !== TRACKER_PROVIDER_WIRE_VERSION)
+    return null;
+  if (String(requestId) !== requestId || requestId.length === 0)
+    return null;
+  if (String(provider) !== provider || provider.length === 0)
+    return null;
+  if (String(method) !== method || !isTrackerProviderMethod(method))
+    return null;
+  if (Object(input) !== input || Array.isArray(input))
+    return null;
+  if (Object(session) !== session || session === null || session === undefined)
+    return null;
+  const { instance, handle } = session;
+  if (String(instance) !== instance || instance.length === 0 || String(handle) !== handle || handle.length === 0)
+    return null;
+  const account = readNotificationsAccount(session.account);
+  if (account === undefined)
+    return null;
+  return { v: TRACKER_PROVIDER_WIRE_VERSION, requestId, method, provider, session: { instance, handle, account }, input };
+};
+
+class TrackerOutboundError extends Error {
+  code;
+  status;
+  constructor(message, code, status) {
+    super(message);
+    this.name = "TrackerOutboundError";
+    this.code = code;
+    this.status = status;
+  }
+}
+var createTrackerOutbound = ({ env }) => {
+  const base = env[OPENCHAMBER_HOST_CALLBACK_URL];
+  if (!base)
+    throw new Error(`${OPENCHAMBER_HOST_CALLBACK_URL} is not set: only a service that provides "tracker" can reach a tracker's server.`);
+  const url = `${base.replace(/\/+$/, "")}${TRACKER_OUTBOUND_PATH}`;
+  return {
+    request: (handle, request) => postOutbound(url, handle, request, TRACKER_OUTBOUND_TIMEOUT_MS, (message, code, status) => new TrackerOutboundError(message, code, status))
+  };
+};
+var QUOTA_PROVIDER_IDLE_MS = 10 * 60000;
+// node_modules/@openchamber/sdk/dist/service-surface.js
+var SURFACE_CONTROLLERS = ["none", "agent", "user"];
+var CONTROLLERS = new Set(SURFACE_CONTROLLERS);
+// service/mapping.ts
+var normaliseMineText = (value) => value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+var stripGitSuffix = (value) => value.replace(/\/+$/, "").replace(/\.git$/i, "");
+var repoIdentityOf = (value) => {
+  let text = value.trim();
+  if (!text)
+    return null;
+  const scp = /^[^@\s]+@[^:\s]+:(.+)$/.exec(text);
+  if (scp) {
+    text = scp[1] ?? "";
+  } else {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+      try {
+        text = new URL(text).pathname;
+      } catch {}
+    }
+    text = text.replace(/^\/+/, "");
+    const hosted = /^[a-z0-9.-]+\.[a-z]{2,}\/(.+)$/i.exec(text);
+    if (hosted)
+      text = hosted[1] ?? text;
+  }
+  const parts = stripGitSuffix(text).split(/[\\/]+/).filter((part) => part.length > 0);
+  if (parts.length === 0)
+    return null;
+  return parts.length >= 2 ? `${parts[parts.length - 2]}/${parts[parts.length - 1]}` : parts[0] ?? null;
+};
+var repoNameOf = (value) => {
+  const identity = repoIdentityOf(value);
+  if (!identity)
+    return null;
+  return identity.split("/").pop() ?? identity;
+};
+var formsOf = (value) => {
+  const trimmed = value.trim();
+  if (!trimmed)
+    return [];
+  const forms = [trimmed];
+  for (const form of [repoIdentityOf(trimmed), repoNameOf(trimmed)]) {
+    if (form && !forms.includes(form))
+      forms.push(form);
+  }
+  return forms;
+};
+var DESCRIPTION_JSON_KEYS = new Set([
+  "ocprojectname",
+  "githuburl",
+  "repourl",
+  "repositoryurl",
+  "gitremote",
+  "giturl",
+  "remoteurl",
+  "remote",
+  "reponame",
+  "repositoryname",
+  "projectname",
+  "project",
+  "repo",
+  "repository",
+  "youtrackproject",
+  "youtrackprojectkey",
+  "youtrackprojectid"
+]);
+var FENCED_BLOCK = /```[^\n]*\r?\n([\s\S]*?)```/g;
+var collectJsonValues = (value, out) => {
+  if (Array.isArray(value)) {
+    for (const item of value)
+      collectJsonValues(item, out);
+    return;
+  }
+  if (!value || typeof value !== "object")
+    return;
+  for (const [key, child] of Object.entries(value)) {
+    if (DESCRIPTION_JSON_KEYS.has(key.toLowerCase())) {
+      if (typeof child === "string" && child.trim())
+        out.push(child.trim());
+      if (Array.isArray(child)) {
+        for (const item of child) {
+          if (typeof item === "string" && item.trim())
+            out.push(item.trim());
+        }
+      }
+      continue;
+    }
+    collectJsonValues(child, out);
+  }
+};
+var jsonDescriptionValues = (description) => {
+  const values = [];
+  const blocks = [...description.matchAll(FENCED_BLOCK)].flatMap((match) => match[1] ? [match[1]] : []);
+  const trimmed = description.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("["))
+    blocks.push(trimmed);
+  for (const block of blocks) {
+    try {
+      collectJsonValues(JSON.parse(block), values);
+    } catch {}
+  }
+  return values;
+};
+var descriptionValues = (description) => {
+  if (!description)
+    return [];
+  return [...new Set(jsonDescriptionValues(description))];
+};
+var descriptionMatches = (description, hints) => {
+  const wanted = [...new Set(hints.flatMap(formsOf))].map(normaliseMineText);
+  if (wanted.length === 0)
+    return false;
+  const described = descriptionValues(description).flatMap(formsOf).map(normaliseMineText);
+  return wanted.some((form) => described.includes(form));
+};
+
+// service/query.ts
+var quoteTerm = (term) => /\s/.test(term) ? `{${term}}` : term;
+var valueListQuery = (field, names) => `${field}: ${names.map(quoteTerm).join(", ")}`;
+var projectQuery = (containers) => {
+  const terms = containers.map((container) => container.key ?? container.name).filter((term) => Boolean(term));
+  if (terms.length === 0)
+    return null;
+  return `project: ${terms.map(quoteTerm).join(", ")}`;
+};
+var PRIORITY_QUERY = {
+  urgent: ["Show-stopper", "Critical", "Blocker"],
+  high: ["Major", "High"],
+  medium: ["Normal", "Medium"],
+  low: ["Minor", "Low"]
+};
+var priorityFilterQuery = (priority) => {
+  if (priority === "all" || priority === "none")
+    return null;
+  const names = PRIORITY_QUERY[priority];
+  if (!names)
+    return null;
+  return valueListQuery("Priority", names);
+};
+var peopleFilterQuery = (people) => {
+  if (people === "me")
+    return "for: me";
+  if (people === "created")
+    return "created by: me";
+  return null;
+};
+var stateNameQuery = (names) => names.length === 0 ? null : valueListQuery("State", names);
+var categoryFallback = (category) => category === "canceled" ? "#Resolved" : "#Unresolved";
+
+// service/youtrack.ts
+var ISSUE_FIELDS = [
+  "id",
+  "idReadable",
+  "summary",
+  "description",
+  "created",
+  "updated",
+  "resolved",
+  "project(id,name,shortName)",
+  "tags(id,name,color(id))",
+  "customFields(name,value(id,name,isResolved,login,fullName,avatarUrl))"
+].join(",");
+var ISSUE_FIELDS_WITH_COMMENTS = `${ISSUE_FIELDS},comments(id,text,created,author(id,login,name,fullName,avatarUrl))`;
+var iso = (ms) => typeof ms === "number" && Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+var absolute = (instance, url) => {
+  if (!url)
+    return null;
+  if (/^https?:\/\//i.test(url))
+    return url;
+  return `${instance}${url.startsWith("/") ? "" : "/"}${url}`;
+};
+var single = (value) => {
+  if (Array.isArray(value))
+    return value[0] ?? null;
+  return value ?? null;
+};
+var fieldNamed = (issue, name) => {
+  const field = issue.customFields?.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
+  return single(field?.value);
+};
+var isStateValue = (value) => Object(value) === value && !Array.isArray(value) && typeof value.isResolved === "boolean";
+var stateOf = (issue) => {
+  for (const field of issue.customFields ?? []) {
+    const candidates = Array.isArray(field.value) ? field.value : [field.value];
+    const state = candidates.find(isStateValue);
+    if (state)
+      return { name: field.name, value: state };
+  }
+  return { name: "State", value: null };
+};
+var categoryOf = (name, isResolved) => {
+  const text = (name ?? "").trim().toLowerCase();
+  if (/won'?t fix|cancel|duplicate|obsolete|rejected|declined|invalid/.test(text))
+    return "canceled";
+  if (isResolved === true)
+    return "done";
+  if (!text)
+    return null;
+  if (/backlog|icebox/.test(text))
+    return "backlog";
+  if (/triage|inbox/.test(text))
+    return "triage";
+  if (/in progress|in review|review|testing|\bqa\b|doing|started|in dev|development|implement|pending/.test(text))
+    return "in-progress";
+  if (/to ?do|todo|submitted|open|new|ready|approved/.test(text))
+    return "todo";
+  return "todo";
+};
+var COMMON_STATE_NAMES = [
+  "Triage",
+  "Inbox",
+  "Backlog",
+  "Icebox",
+  "Submitted",
+  "Open",
+  "New",
+  "Ready",
+  "Approved",
+  "To Do",
+  "In Progress",
+  "In Review",
+  "Review",
+  "Testing",
+  "QA",
+  "Doing",
+  "Started",
+  "In Development",
+  "Pending Deploy",
+  "Won't fix",
+  "Duplicate",
+  "Obsolete",
+  "Rejected",
+  "Declined",
+  "Invalid"
+];
+var commonStateNames = (category) => COMMON_STATE_NAMES.filter((name) => categoryOf(name, false) === category);
+var PRIORITY_BY_NAME = {
+  "show-stopper": "urgent",
+  showstopper: "urgent",
+  blocker: "urgent",
+  critical: "urgent",
+  highest: "urgent",
+  major: "high",
+  high: "high",
+  normal: "medium",
+  medium: "medium",
+  minor: "low",
+  low: "low",
+  lowest: "low",
+  "no priority": "none",
+  none: "none"
+};
+var priorityOf = (name) => {
+  if (!name)
+    return "none";
+  return PRIORITY_BY_NAME[name.trim().toLowerCase()] ?? "none";
+};
+var personOf = (instance, value) => {
+  if (!value)
+    return null;
+  const name = ("fullName" in value ? value.fullName : undefined) ?? value.name ?? value.login ?? null;
+  if (!name)
+    return null;
+  return { name, avatarUrl: absolute(instance, value.avatarUrl) };
+};
+var toContainer = (project) => ({
+  id: project.id,
+  key: project.shortName ?? project.name ?? null,
+  name: project.name ?? project.shortName ?? project.id
+});
+var toSummary = (instance, raw) => {
+  const identifier = (raw.idReadable ?? raw.id).toUpperCase();
+  const state = stateOf(raw);
+  const priority = fieldNamed(raw, "priority");
+  const assignee = fieldNamed(raw, "assignee");
+  return {
+    id: raw.id,
+    identifier,
+    title: raw.summary ?? identifier,
+    url: `${instance}/issue/${encodeURIComponent(identifier)}`,
+    state: state.value ? {
+      id: state.value.id ?? null,
+      name: state.value.name ?? "",
+      category: categoryOf(state.value.name, state.value.isResolved)
+    } : null,
+    priority: priorityOf(priority?.name),
+    labels: (raw.tags ?? []).map((tag) => ({
+      id: tag.id,
+      name: tag.name ?? tag.id,
+      color: tag.color?.id ?? null
+    })),
+    assignee: personOf(instance, assignee),
+    container: raw.project ? toContainer(raw.project) : null,
+    updatedAt: iso(raw.updated)
+  };
+};
+var toComment = (instance, raw) => ({
+  id: raw.id,
+  body: raw.text ?? "",
+  createdAt: iso(raw.created),
+  author: personOf(instance, raw.author)
+});
+var toItem = (instance, raw) => ({
+  ...toSummary(instance, raw),
+  description: raw.description ?? null,
+  comments: (raw.comments ?? []).map((comment) => toComment(instance, comment))
+});
+var toWorkflowState = (value, position) => ({
+  id: value.name ?? value.id ?? `state-${position}`,
+  name: value.name ?? value.id ?? `State ${position}`,
+  category: categoryOf(value.name, value.isResolved),
+  position
+});
+var toLiveSummary = (instance, raw) => {
+  const summary = toSummary(instance, raw);
+  return {
+    identifier: summary.identifier,
+    title: summary.title,
+    state: { name: summary.state?.name ?? "Open", category: summary.state?.category ?? "todo" }
+  };
+};
+
+// service/main.ts
+var port = Number(process.env.OPENCHAMBER_SERVICE_PORT);
+var serviceToken = process.env.OPENCHAMBER_SERVICE_TOKEN ?? "";
+if (!port || !serviceToken) {
+  console.error("OPENCHAMBER_SERVICE_PORT and OPENCHAMBER_SERVICE_TOKEN are required");
+  process.exit(1);
+}
+var outbound = createTrackerOutbound({ env: process.env });
+var PAGE_SIZE = 40;
+
+class CallError extends Error {
+  status;
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
+var serverFailure = (response) => {
+  if (response.status === 401)
+    return new CallError("YouTrack refused the credential.", 401);
+  let message = `YouTrack answered ${response.status}.`;
+  try {
+    const parsed = JSON.parse(response.body);
+    const detail = parsed.error_description ?? parsed.error ?? parsed.message;
+    if (detail)
+      message = `YouTrack answered ${response.status}: ${detail}`;
+  } catch {}
+  return new CallError(message, response.status);
+};
+var api = async (call, method, path, options = {}) => {
+  const response = await outbound.request(call.handle, {
+    method,
+    path,
+    query: options.query,
+    headers: options.body ? { accept: "application/json", "content-type": "application/json" } : { accept: "application/json" },
+    body: options.body ? JSON.stringify(options.body) : undefined
+  });
+  if (response.status >= 400)
+    throw serverFailure(response);
+  try {
+    const data = JSON.parse(response.body);
+    return data;
+  } catch {
+    throw new CallError("YouTrack answered with something other than JSON.", 502);
+  }
+};
+var orNull = async (request) => {
+  try {
+    return await request;
+  } catch (error) {
+    if (error instanceof CallError && error.status === 404)
+      return null;
+    throw error;
+  }
+};
+var seg = encodeURIComponent;
+var optionalText = (input, key) => {
+  if (!input || typeof input !== "object")
+    return null;
+  const value = input[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+};
+var PROJECTS_TTL_MS = 5 * 60000;
+var PROJECTS_RETRY_MS = 30000;
+var PROJECTS_CACHE = new Map;
+var PROJECTS_INFLIGHT = new Map;
+var ALL_CONTAINERS = new Map;
+var readProjects = async (call) => {
+  const projects = new Map;
+  for (let skip = 0;skip < 5000; skip += 100) {
+    const page = await api(call, "GET", "/api/admin/projects", {
+      query: {
+        fields: "id,name,shortName",
+        $top: "100",
+        $skip: String(skip)
+      }
+    });
+    for (const project of page) {
+      if (project.id)
+        projects.set(project.id, project);
+    }
+    if (page.length < 100)
+      break;
+  }
+  return [...projects.values()].map(toContainer);
+};
+var loadProjects = async (call) => {
+  const cached = PROJECTS_CACHE.get(call.instance);
+  if (cached && Date.now() - cached.at < cached.ttl)
+    return cached.projects;
+  const inflight = PROJECTS_INFLIGHT.get(call.instance);
+  if (inflight)
+    return inflight;
+  const request = (async () => {
+    try {
+      const all = await readProjects(call);
+      PROJECTS_CACHE.set(call.instance, { at: Date.now(), ttl: PROJECTS_TTL_MS, projects: all });
+      ALL_CONTAINERS.set(call.instance, all);
+      return all;
+    } catch (error) {
+      console.error(`[youtrack] could not read the project list: ${error instanceof Error ? error.message : String(error)}`);
+      const fallback = PROJECTS_CACHE.get(call.instance)?.projects ?? ALL_CONTAINERS.get(call.instance) ?? [];
+      PROJECTS_CACHE.set(call.instance, { at: Date.now(), ttl: PROJECTS_RETRY_MS, projects: fallback });
+      return fallback;
+    } finally {
+      PROJECTS_INFLIGHT.delete(call.instance);
+    }
+  })();
+  PROJECTS_INFLIGHT.set(call.instance, request);
+  return request;
+};
+var loadContainers = async (call) => loadProjects(call);
+var containerFilterQuery = async (call, containerId) => {
+  const known = ALL_CONTAINERS.get(call.instance) ?? [];
+  let container = known.find((entry) => entry.id === containerId);
+  if (!container) {
+    await loadProjects(call);
+    container = (ALL_CONTAINERS.get(call.instance) ?? []).find((entry) => entry.id === containerId);
+  }
+  if (container)
+    return `project: ${quoteTerm(container.key ?? container.name)}`;
+  try {
+    const project = await orNull(api(call, "GET", `/api/admin/projects/${seg(containerId)}`, { query: { fields: "id,name,shortName" } }));
+    if (project)
+      return `project: ${quoteTerm(project.shortName ?? project.name ?? containerId)}`;
+  } catch (error) {
+    if (!(error instanceof CallError))
+      throw error;
+  }
+  throw new CallError(`Unknown YouTrack project ${containerId}.`, 404);
+};
+var GIT_REMOTE_TTL_MS = 5 * 60000;
+var GIT_REMOTE_CACHE = new Map;
+var gitIdentityOf = async (directory) => {
+  if (!directory || !isAbsolute(directory) || directory.includes("\x00"))
+    return null;
+  const cached = GIT_REMOTE_CACHE.get(directory);
+  if (cached && Date.now() - cached.at < GIT_REMOTE_TTL_MS)
+    return cached.value;
+  const runGit = (args) => new Promise((resolve, reject) => {
+    execFile("git", ["-C", directory, ...args], { timeout: 3000, maxBuffer: 64 * 1024 }, (error, stdout) => {
+      if (error)
+        reject(error);
+      else
+        resolve(String(stdout).trim());
+    });
+  });
+  let remote = "";
+  try {
+    remote = await runGit(["remote", "get-url", "origin"]);
+  } catch {}
+  if (!remote) {
+    try {
+      const names = (await runGit(["remote"])).split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
+      if (names[0])
+        remote = await runGit(["remote", "get-url", names[0]]);
+    } catch {}
+  }
+  const value = remote ? { remote, repo: repoNameOf(remote) } : null;
+  GIT_REMOTE_CACHE.set(directory, { at: Date.now(), value });
+  return value;
+};
+var mappingHintsOf = async (directory, projectName) => {
+  const hints = [];
+  const folder = directory ? basename(directory) : "";
+  if (folder)
+    hints.push({ value: folder, source: "folder" });
+  if (projectName)
+    hints.push({ value: projectName, source: "name" });
+  const git = await gitIdentityOf(directory);
+  if (git?.remote)
+    hints.push({ value: git.remote, source: "repo" });
+  if (git?.repo)
+    hints.push({ value: git.repo, source: "repo" });
+  return hints;
+};
+var ISSUE_MAPPING_TTL_MS = 60000;
+var ISSUE_MAPPING_CACHE = new Map;
+var issueMappingOf = async (call, directory, projectName, hints) => {
+  if (hints.length === 0)
+    return null;
+  const key = `${call.instance}\x00${directory ?? ""}\x00${projectName ?? ""}`;
+  const cached = ISSUE_MAPPING_CACHE.get(key);
+  if (cached && Date.now() - cached.at < ISSUE_MAPPING_TTL_MS)
+    return cached.value;
+  const values = hints.map((hint) => hint.value).filter(Boolean);
+  const terms = [...new Set(hints.map((hint) => repoNameOf(hint.value) ?? hint.value.trim()).filter((term) => term.length >= 3))];
+  const projects = new Map;
+  const matchedTerms = new Set;
+  for (const term of terms) {
+    try {
+      const issues = await api(call, "GET", "/api/issues", {
+        query: {
+          query: term,
+          $top: "20",
+          fields: "id,idReadable,project(id,shortName,name),description"
+        }
+      });
+      for (const issue of issues) {
+        if (!issue.project?.id)
+          continue;
+        if (!descriptionMatches(issue.description, values))
+          continue;
+        projects.set(issue.project.id, toContainer(issue.project));
+        matchedTerms.add(term);
+      }
+    } catch (error) {
+      if (error instanceof CallError && (error.status === 403 || error.status === 404))
+        continue;
+      throw error;
+    }
+  }
+  const value = {
+    projects: [...projects.values()],
+    terms: [...matchedTerms]
+  };
+  ISSUE_MAPPING_CACHE.set(key, { at: Date.now(), value });
+  return value;
+};
+var STATE_NAMES_CACHE = new Map;
+var loadStates = async (call, containerId) => {
+  const cacheKey = `${call.instance}\x00${containerId}`;
+  const cached = STATE_NAMES_CACHE.get(cacheKey);
+  if (cached)
+    return cached;
+  let states = [];
+  try {
+    const fields = await api(call, "GET", `/api/admin/projects/${seg(containerId)}/customFields`, { query: { fields: "id,name,field(name),bundle(values(id,name,isResolved))" } });
+    const stateField = fields.find((field) => (field.bundle?.values ?? []).some(isStateValue));
+    states = (stateField?.bundle?.values ?? []).map((value, position) => toWorkflowState(value, position));
+  } catch (error) {
+    if (!(error instanceof CallError && (error.status === 403 || error.status === 404)))
+      throw error;
+  }
+  if (states.length === 0)
+    states = await observedStates(call, containerId);
+  STATE_NAMES_CACHE.set(cacheKey, states);
+  return states;
+};
+var observedStates = async (call, containerId) => {
+  const container = (await loadContainers(call)).find((entry) => entry.id === containerId);
+  if (!container)
+    return [];
+  const term = container.key ?? container.name;
+  const issues = await api(call, "GET", "/api/issues", {
+    query: {
+      query: `project: ${/\s/.test(term) ? `{${term}}` : term}`,
+      $top: "100",
+      fields: "id,customFields(name,value(id,name,isResolved))"
+    }
+  });
+  const byName = new Map;
+  for (const issue of issues) {
+    const value = stateOf(issue).value;
+    if (value?.name)
+      byName.set(value.name, value);
+  }
+  return [...byName.values()].map((value, position) => toWorkflowState(value, position));
+};
+var MAX_STATE_CONTAINERS = 40;
+var statesForAll = async (call, containers) => {
+  const queue = [...containers];
+  const states = [];
+  const workers = Array.from({ length: Math.min(6, queue.length) }, async () => {
+    for (;; ) {
+      const next = queue.shift();
+      if (!next)
+        return;
+      try {
+        states.push(...await loadStates(call, next.id));
+      } catch (error) {
+        console.error(`[youtrack] could not read the workflow of ${next.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  });
+  await Promise.all(workers);
+  return states;
+};
+var stateFilterQuery = async (call, filter, containerId, containers) => {
+  if (filter === "all")
+    return null;
+  if (filter === "open")
+    return "#Unresolved";
+  if (filter === "done")
+    return "#Resolved";
+  const categories = ["triage", "backlog", "todo", "in-progress", "canceled"];
+  const category = categories.find((value) => value === filter);
+  if (!category)
+    return "#Unresolved";
+  if (containerId) {
+    const states = await loadStates(call, containerId);
+    const names = states.filter((state) => state.category === category).map((state) => state.name);
+    return stateNameQuery(names) ?? categoryFallback(category);
+  }
+  const visible = containers ?? await loadContainers(call);
+  if (visible.length > MAX_STATE_CONTAINERS) {
+    return stateNameQuery(commonStateNames(category)) ?? categoryFallback(category);
+  }
+  const states = await statesForAll(call, visible);
+  const names = [...new Set(states.filter((state) => state.category === category).map((state) => state.name))];
+  return stateNameQuery(names) ?? categoryFallback(category);
+};
+var handlers = {
+  "auth.probe": async (call) => {
+    const response = await outbound.request(call.handle, {
+      method: "GET",
+      path: "/api/config",
+      query: { fields: "version" },
+      headers: { accept: "application/json" }
+    });
+    if (response.status !== 200) {
+      return { supported: false, message: `${call.instance} answered ${response.status} to /api/config.` };
+    }
+    try {
+      const config = JSON.parse(response.body);
+      return typeof config.version === "string" ? { supported: true } : { supported: false, message: `${call.instance} does not look like a YouTrack server.` };
+    } catch {
+      return { supported: false, message: `${call.instance} did not answer with JSON.` };
+    }
+  },
+  "auth.verify": async (call) => {
+    const me = await api(call, "GET", "/api/users/me", { query: { fields: "id,login,name,fullName,email,avatarUrl" } });
+    const account = {
+      id: me.id ?? me.login ?? "me",
+      login: me.login ?? null
+    };
+    const name = me.fullName ?? me.name;
+    if (name)
+      account.name = name;
+    const avatarUrl = absolute(call.instance, me.avatarUrl);
+    if (avatarUrl)
+      account.avatarUrl = avatarUrl;
+    return { account };
+  },
+  "items.list": async (call, input) => {
+    const skip = Math.max(0, Number(input.cursor ?? "0") || 0);
+    const parts = [];
+    const directory = optionalText(input, "directory") ?? optionalText(input, "projectPath");
+    const projectName = optionalText(input, "projectName");
+    const hints = await mappingHintsOf(directory, projectName);
+    const mapping = hints.length > 0 ? await issueMappingOf(call, directory, projectName, hints) : null;
+    const mapped = !input.containerId && mapping && mapping.projects.length > 0 ? mapping : null;
+    if (input.containerId) {
+      parts.push(await containerFilterQuery(call, input.containerId));
+    } else if (mapped) {
+      const scope = projectQuery(mapped.projects);
+      if (scope)
+        parts.push(scope);
+    } else {
+      const scope = projectQuery(await loadContainers(call));
+      if (scope)
+        parts.push(scope);
+    }
+    const metadataTerm = mapped ? mapped.terms.find((term) => !/\s/.test(term)) ?? mapped.terms[0] ?? null : null;
+    if (metadataTerm)
+      parts.push(metadataTerm);
+    const stateQuery = await stateFilterQuery(call, input.state, input.containerId, input.containerId ? null : mapped?.projects ?? null);
+    if (stateQuery)
+      parts.push(stateQuery);
+    const peopleQuery = peopleFilterQuery(input.people);
+    if (peopleQuery)
+      parts.push(peopleQuery);
+    const priorityQuery = priorityFilterQuery(input.priority);
+    if (priorityQuery)
+      parts.push(priorityQuery);
+    if (input.query?.trim())
+      parts.push(input.query.trim());
+    const query = {
+      fields: ISSUE_FIELDS,
+      $top: String(PAGE_SIZE),
+      $skip: String(skip)
+    };
+    if (parts.length > 0)
+      query.query = parts.join(" and ");
+    const page = await api(call, "GET", "/api/issues", { query });
+    const items = metadataTerm && hints.length > 0 ? page.filter((issue) => descriptionMatches(issue.description, hints.map((hint) => hint.value))) : page;
+    const hasMore = page.length >= PAGE_SIZE;
+    return {
+      items: items.map((issue) => toSummary(call.instance, issue)),
+      cursor: hasMore ? String(skip + page.length) : null,
+      hasMore
+    };
+  },
+  "items.get": async (call, input) => {
+    const issue = await orNull(api(call, "GET", `/api/issues/${seg(input.id)}`, { query: { fields: ISSUE_FIELDS_WITH_COMMENTS } }));
+    return { item: issue ? toItem(call.instance, issue) : null };
+  },
+  "items.updateState": async (call, input) => {
+    const current = await api(call, "GET", `/api/issues/${seg(input.id)}`, { query: { fields: `id,idReadable,${ISSUE_FIELDS}` } });
+    const field = stateOf(current);
+    const updated = await api(call, "POST", `/api/issues/${seg(input.id)}`, {
+      query: { fields: ISSUE_FIELDS },
+      body: { customFields: [{ name: field.name, value: { name: input.stateId } }] }
+    });
+    if (stateOf(updated).value?.name === input.stateId) {
+      return { item: toItem(call.instance, updated) };
+    }
+    await api(call, "POST", "/api/commands", {
+      query: { fields: "id" },
+      body: {
+        query: `${field.name} ${/\s/.test(input.stateId) ? `{${input.stateId}}` : input.stateId}`,
+        issues: [{ idReadable: current.idReadable ?? input.id }]
+      }
+    });
+    const again = await api(call, "GET", `/api/issues/${seg(input.id)}`, { query: { fields: ISSUE_FIELDS_WITH_COMMENTS } });
+    return { item: toItem(call.instance, again) };
+  },
+  "items.liveSummaries": async (call, input) => {
+    const items = [];
+    const queue = [...input.identifiers];
+    const workers = Array.from({ length: Math.min(5, queue.length) }, async () => {
+      for (;; ) {
+        const next = queue.shift();
+        if (!next)
+          return;
+        const issue = await orNull(api(call, "GET", `/api/issues/${seg(next)}`, { query: { fields: ISSUE_FIELDS } }));
+        if (issue)
+          items.push(toLiveSummary(call.instance, issue));
+      }
+    });
+    await Promise.all(workers);
+    return { items };
+  },
+  "states.list": async (call, input) => ({
+    states: await loadStates(call, input.containerId)
+  }),
+  "containers.list": async (call, input) => {
+    const directory = optionalText(input, "directory") ?? optionalText(input, "projectPath");
+    const projectName = optionalText(input, "projectName");
+    if (directory || projectName) {
+      try {
+        const hints = await mappingHintsOf(directory, projectName);
+        await issueMappingOf(call, directory, projectName, hints);
+      } catch (error) {
+        console.error(`[youtrack] could not resolve the project mapping: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return { containers: await loadContainers(call) };
+  },
+  "comments.create": async (call, input) => {
+    const comment = await orNull(api(call, "POST", `/api/issues/${seg(input.identifier)}/comments`, { query: { fields: "id,text" }, body: { text: input.body } }));
+    return { comment: comment ? { id: comment.id } : null };
+  }
+};
+var failureOf = (error) => {
+  const failure = {
+    message: error.message.slice(0, TRACKER_PROVIDER_ERROR_MESSAGE_MAX) || "Unexpected failure"
+  };
+  if (error instanceof TrackerOutboundError) {
+    if (error.status >= 400 && error.status <= 599)
+      failure.status = error.status;
+    if (/^[A-Z_]{1,64}$/.test(error.code))
+      failure.code = error.code;
+  } else if (error instanceof CallError) {
+    failure.status = error.status;
+  }
+  return failure;
+};
+var answer = async (method, call, input) => {
+  try {
+    const data = await handlers[method](call, input);
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, error: failureOf(error instanceof Error ? error : new Error(String(error))) };
+  }
+};
+var send = (res, status, body) => {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body));
+};
+var readBody = (req) => new Promise((resolve, reject) => {
+  let body = "";
+  req.on("data", (chunk) => {
+    body += chunk;
+  });
+  req.on("end", () => resolve(body));
+  req.on("error", reject);
+});
+var server = http.createServer((req, res) => {
+  if (req.headers.authorization !== `Bearer ${serviceToken}`) {
+    send(res, 401, { error: "unauthorized" });
+    return;
+  }
+  const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  if (url.pathname === "/health") {
+    send(res, 200, { ok: true });
+    return;
+  }
+  if (url.pathname !== TRACKER_PROVIDER_PATH || req.method !== "POST") {
+    send(res, 404, { error: "not-found" });
+    return;
+  }
+  readBody(req).then(async (body) => {
+    const request = readTrackerProviderRequest(body);
+    if (!request) {
+      send(res, 400, { error: "not a tracker call this service understands" });
+      return;
+    }
+    send(res, 200, await answer(request.method, { instance: request.session.instance, handle: request.session.handle }, request.input));
+  }).catch(() => send(res, 500, { error: "could not read the request" }));
+});
+server.listen(port, "127.0.0.1");

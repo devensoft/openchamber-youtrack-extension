@@ -1,6 +1,6 @@
 {
   "name": "openchamber-youtrack-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -10,7 +10,7 @@
     "url": "git+https://github.com/devensoft/openchamber-youtrack-extension.git"
   },
   "scripts": {
-    "build": "bun run scripts/build.ts",
+    "build": "bunx openchamber-guest-bundle --node service/main.ts service/main.js",
     "typecheck": "tsc --noEmit",
     "test": "bun run build && bun run typecheck && bun test",
     "verify": "bun run build && git diff --exit-code -- service/main.js",
@@ -18,7 +18,7 @@
     "bump": "bun run scripts/bump.ts"
   },
   "dependencies": {
-    "@openchamber/sdk": "2.6.1"
+    "@openchamber/sdk": "2.7.0"
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",
@@ -28,20 +28,23 @@
   "openchamber": {
     "apiVersion": 1,
     "engines": {
-      "openchamber": ">=2.6.0"
+      "openchamber": ">=2.7.0"
     },
+    "id": "youtrack",
+    "name": "YouTrack",
+    "icon": "icon.svg",
     "contributes": {
-      "panel": {
-        "id": "youtrack",
-        "name": "YouTrack",
-        "icon": "icon.svg"
-      },
       "service": {
         "entry": "service/main.js",
         "runtime": "host",
         "provides": [
           "tracker"
-        ]
+        ],
+        "permissions": {
+          "exec": [
+            "git"
+          ]
+        }
       },
       "tracker": {
         "wire": 1,
