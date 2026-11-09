@@ -1,2 +1,1262 @@
-import mt from"node:http";import{mkdir as Ut,readFile as me,writeFile as ht}from"node:fs/promises";import{homedir as yt}from"node:os";import{join as A}from"node:path";function Me(e){let t=e.documentElement;if(t.hasAttribute("data-oc-scrollbar-activity"))return;t.setAttribute("data-oc-scrollbar-activity","");let r=new WeakMap;e.addEventListener("scroll",(n)=>{let o=n.target===e?t:n.target;if(!(o instanceof Element))return;if(!o.hasAttribute("data-oc-scrolling"))o.setAttribute("data-oc-scrolling","");let s=r.get(o);if(s!==void 0)clearTimeout(s);r.set(o,setTimeout(()=>{r.delete(o),o.removeAttribute("data-oc-scrolling")},1000))},{capture:!0,passive:!0})}var ge=`(${Me.toString()})(document);`;var V=["{id}","{segment}","{segments+}"];var zt=new Set(V);var B=["turn-finished","turn-failed","permission-asked","question-asked"];var qt=new Set(B);var Y=["file","directory","other","missing"];var W=["HOST_UNAVAILABLE","HOST_TIMEOUT","HOST_REJECTED","DISCONNECTED","DISABLED","BAD_PATH","NO_INTEGRATION","NO_SERVICE","SERVICE_FAILED","REQUEST_FAILED","RESPONSE_TOO_LARGE","NO_SESSION","SESSION_BUSY","NOT_GRANTED","NO_DIRECTORY","NOT_FOUND","FILE_TOO_LARGE","DENIED","NO_MODEL","MODEL_FAILED","UNSUPPORTED"],J=["stopped","starting","ready","failed"],nr=new Set(W);var or=new Set(J);var sr=new Set(Y);var z=["browser.open","browser.snapshot","browser.click","browser.type","browser.select","browser.scroll","browser.back","browser.forward","browser.inspect","browser.capture","browser.resize","browser.close"];var Or=new Set(z);var dt=async(e,t,r,n,o)=>{let s;try{s=await fetch(e,{method:"POST",headers:{authorization:`Bearer ${t}`,"content-type":"application/json"},body:JSON.stringify(r),signal:AbortSignal.timeout(n+5000)})}catch(c){throw o(`OpenChamber did not answer: ${c instanceof Error?c.message:String(c)}`,"HOST_UNAVAILABLE",0)}let i;try{i=Object(await s.json())}catch{throw o("OpenChamber answered with something other than JSON","HOST_UNAVAILABLE",s.status)}if(!s.ok){let c=i.error?.message,l=i.error?.code;throw o(String(c)===c&&c.length>0?c:`OpenChamber refused the request (${s.status})`,String(l)===l&&l.length>0?l:"OUTBOUND_REFUSED",s.status)}if(!Number.isSafeInteger(i.status)||String(i.body)!==i.body)throw o("OpenChamber relayed a malformed answer","HOST_UNAVAILABLE",s.status);let a={};for(let[c,l]of Object.entries(Object(i.headers??{})))if(String(l)===l)a[c]=l;return{status:Number(i.status),headers:a,body:i.body}};var pt=(e)=>{if(e===null)return null;if(Object(e)!==e||e===void 0)return;let{id:t,login:r}=e;if(String(t)!==t||t.length===0)return;if(r!==null&&(String(r)!==r||r.length===0))return;return{id:t,login:r}};var N="/tracker",P=1,Q=["auth.probe","auth.verify","items.list","items.get","items.updateState","items.liveSummaries","states.list","containers.list","comments.create"];var M=2000;var q="/tracker/outbound",Z=20000;var ee=(e)=>Q.some((t)=>t===e),g=(e)=>{let t;try{let m=JSON.parse(e);if(Object(m)!==m||m===null)return null;t=m}catch{return null}let{v:r,requestId:n,method:o,provider:s,session:i,input:a}=t;if(r!==P)return null;if(String(n)!==n||n.length===0)return null;if(String(s)!==s||s.length===0)return null;if(String(o)!==o||!ee(o))return null;if(Object(a)!==a||Array.isArray(a))return null;if(Object(i)!==i||i===null||i===void 0)return null;let{instance:c,handle:l}=i;if(String(c)!==c||c.length===0||String(l)!==l||l.length===0)return null;let S=pt(i.account);if(S===void 0)return null;return{v:P,requestId:n,method:o,provider:s,session:{instance:c,handle:l,account:S},input:a}};class O extends Error{code;status;constructor(e,t,r){super(e);this.name="TrackerOutboundError",this.code=t,this.status=r}}var x=({env:e})=>{let t=e.OPENCHAMBER_HOST_CALLBACK_URL;if(!t)throw Error(`OPENCHAMBER_HOST_CALLBACK_URL is not set: only a service that provides "tracker" can reach a tracker's server.`);let r=`${t.replace(/\/+$/,"")}${q}`;return{request:(n,o)=>dt(r,n,o,Z,(s,i,a)=>new O(s,i,a))}};var te=["none","agent","user"];var Ar=new Set(te);var re=()=>({selectedByInstance:{},modeByInstance:{},knownProjects:{},currentUserByInstance:{},lastInstance:null}),ne=(e)=>{if(!e||typeof e!=="object")return{};let t={};for(let[r,n]of Object.entries(e)){if(!Array.isArray(n))continue;let o=n.flatMap((s)=>{if(!s||typeof s!=="object"||typeof s.id!=="string")return[];let i=s.access==="edit"||s.access==="read"?s.access:"unknown";return[{id:s.id,key:typeof s.key==="string"?s.key:null,name:typeof s.name==="string"?s.name:s.id,access:i}]});t[r]=o}return t},oe=(e,t)=>e.modeByInstance[t]??((e.selectedByInstance[t]?.length??0)>0?"selected":"all"),se=(e,t,r)=>{let n=new Set(r);if(t==="all"||n.size===0)return[...e];return e.filter((o)=>n.has(o.id))},ie=(e,t)=>{let r;try{r=JSON.parse(e)}catch{return null}let n=typeof r.instance==="string"?r.instance:t,o=Array.isArray(r.selected)?r.selected.filter((i)=>typeof i==="string"):null;if(!n||!o)return null;let s=r.mode==="all"||r.mode==="selected"?r.mode:o.length===0?"all":"selected";if(s==="selected"&&o.length===0)return null;return{instance:n,mode:s,selected:o}},ae=(e,t)=>{let r=t.size===0?e.selected:e.selected.filter((n)=>t.has(n));if(e.mode==="selected"&&r.length===0)return null;return{...e,selected:r}};var U=(e)=>/\s/.test(e)?`{${e}}`:e,ce=(e,t)=>`${e}: ${t.map(U).join(", ")}`,_e=(e)=>{let t=e.map((r)=>r.key??r.name).filter((r)=>Boolean(r));if(t.length===0)return null;return`project: ${t.map(U).join(", ")}`},Ot={urgent:["Show-stopper","Critical","Blocker"],high:["Major","High"],medium:["Normal","Medium"],low:["Minor","Low"]},le=(e)=>{if(e==="all"||e==="none")return null;let t=Ot[e];if(!t)return null;return ce("Priority",t)},Ee=(e)=>{if(e==="me")return"for: me";if(e==="created")return"created by: me";return null},Te=(e)=>e.length===0?null:ce("State",e),L=(e)=>e==="canceled"?"#Resolved":"#Unresolved";var p=["id","idReadable","summary","description","created","updated","resolved","project(id,name,shortName)","tags(id,name,color(id))","customFields(name,value(id,name,isResolved,login,fullName,avatarUrl))"].join(","),G=`${p},comments(id,text,created,author(id,login,name,fullName,avatarUrl))`,Se=(e)=>typeof e==="number"&&Number.isFinite(e)?new Date(e).toISOString():null,b=(e,t)=>{if(!t)return null;if(/^https?:\/\//i.test(t))return t;return`${e}${t.startsWith("/")?"":"/"}${t}`},Rt=(e)=>{if(Array.isArray(e))return e[0]??null;return e??null},ue=(e,t)=>{let r=e.customFields?.find((n)=>n.name.toLowerCase()===t.toLowerCase());return Rt(r?.value)},D=(e)=>Object(e)===e&&!Array.isArray(e)&&typeof e.isResolved==="boolean",R=(e)=>{for(let t of e.customFields??[]){let n=(Array.isArray(t.value)?t.value:[t.value]).find(D);if(n)return{name:t.name,value:n}}return{name:"State",value:null}},de=(e,t)=>{let r=(e??"").trim().toLowerCase();if(/won'?t fix|cancel|duplicate|obsolete|rejected|declined|invalid/.test(r))return"canceled";if(t===!0)return"done";if(!r)return null;if(/backlog|icebox/.test(r))return"backlog";if(/triage|inbox/.test(r))return"triage";if(/in progress|in review|review|testing|\bqa\b|doing|started|in dev|development|implement|pending/.test(r))return"in-progress";if(/to ?do|todo|submitted|open|new|ready|approved/.test(r))return"todo";return"todo"},At={"show-stopper":"urgent",showstopper:"urgent",blocker:"urgent",critical:"urgent",highest:"urgent",major:"high",high:"high",normal:"medium",medium:"medium",minor:"low",low:"low",lowest:"low","no priority":"none",none:"none"},ft=(e)=>{if(!e)return"none";return At[e.trim().toLowerCase()]??"none"},pe=(e,t)=>{if(!t)return null;let r=("fullName"in t?t.fullName:void 0)??t.name??t.login??null;if(!r)return null;return{name:r,avatarUrl:b(e,t.avatarUrl)}},w=(e)=>({id:e.id,key:e.shortName??e.name??null,name:e.name??e.shortName??e.id}),h=(e,t)=>{let r=(t.idReadable??t.id).toUpperCase(),n=R(t),o=ue(t,"priority"),s=ue(t,"assignee");return{id:t.id,identifier:r,title:t.summary??r,url:`${e}/issue/${encodeURIComponent(r)}`,state:n.value?{id:n.value.id??null,name:n.value.name??"",category:de(n.value.name,n.value.isResolved)}:null,priority:ft(o?.name),labels:(t.tags??[]).map((i)=>({id:i.id,name:i.name??i.id,color:i.color?.id??null})),assignee:pe(e,s),container:t.project?w(t.project):null,updatedAt:Se(t.updated)}},It=(e,t)=>({id:t.id,body:t.text??"",createdAt:Se(t.created),author:pe(e,t.author)}),y=(e,t)=>({...h(e,t),description:t.description??null,comments:(t.comments??[]).map((r)=>It(e,r))}),k=(e,t)=>({id:e.name??e.id??`state-${t}`,name:e.name??e.id??`State ${t}`,category:de(e.name,e.isResolved),position:t}),Oe=(e,t)=>{let r=h(e,t);return{identifier:r.identifier,title:r.title,state:{name:r.state?.name??"Open",category:r.state?.category??"todo"}}};var Ue=Number(process.env.OPENCHAMBER_SERVICE_PORT),he=process.env.OPENCHAMBER_SERVICE_TOKEN??"";if(!Ue||!he)console.error("OPENCHAMBER_SERVICE_PORT and OPENCHAMBER_SERVICE_TOKEN are required"),process.exit(1);var ye=x({env:process.env}),X=process.platform==="win32"&&process.env.APPDATA?A(process.env.APPDATA,"openchamber"):A(process.env.XDG_CONFIG_HOME||A(yt(),".config"),"openchamber"),Ce=A(X,"youtrack-extension-projects.json"),Ct=A(X,"tracker-accounts.json"),Pt="ext-youtrack",Nt=async(e)=>{try{let r=JSON.parse(await me(Ct,"utf8")).trackers?.[Pt];if(!r)return!1;let n=typeof r.instance==="string"?r.instance:null;if(n&&n!==e)return!1;return(Array.isArray(r.accounts)?r.accounts:[]).some((s)=>s&&s.status!=="invalid")}catch{return null}},_=re();try{let e=JSON.parse(await me(Ce,"utf8"));if(e&&typeof e.selectedByInstance==="object")_={selectedByInstance:e.selectedByInstance,modeByInstance:typeof e.modeByInstance==="object"&&e.modeByInstance?e.modeByInstance:{},knownProjects:ne(e.knownProjects),currentUserByInstance:typeof e.currentUserByInstance==="object"&&e.currentUserByInstance?e.currentUserByInstance:{},lastInstance:typeof e.lastInstance==="string"?e.lastInstance:null}}catch{}var F=(e)=>oe(_,e),I=new Map(Object.entries(_.knownProjects)),H=_.lastInstance,Re=JSON.stringify(_),C=Promise.resolve(),Pe=()=>{let e=JSON.stringify(_);if(e===Re)return C;return C=C.then(async()=>{try{await Ut(X,{recursive:!0}),await ht(Ce,`${e}
-`),Re=e}catch(t){console.error(`[youtrack] could not save the project selection: ${t instanceof Error?t.message:String(t)}`)}}),C},Ae=40;class u extends Error{status;constructor(e,t){super(e);this.status=t}}var Mt=(e)=>{if(e.status===401)return new u("YouTrack refused the credential.",401);let t=`YouTrack answered ${e.status}.`;try{let r=JSON.parse(e.body),n=r.error_description??r.error??r.message;if(n)t=`YouTrack answered ${e.status}: ${n}`}catch{}return new u(t,e.status)},E=async(e,t,r,n={})=>{let o=await ye.request(e.handle,{method:t,path:r,query:n.query,headers:n.body?{accept:"application/json","content-type":"application/json"}:{accept:"application/json"},body:n.body?JSON.stringify(n.body):void 0});if(o.status>=400)throw Mt(o);try{return JSON.parse(o.body)}catch{throw new u("YouTrack answered with something other than JSON.",502)}},v=async(e)=>{try{return await e}catch(t){if(t instanceof u&&t.status===404)return null;throw t}},d=encodeURIComponent,fe=new Map,gt=async(e)=>{let t=_.currentUserByInstance[e.instance];if(t)return t;let r=await E(e,"GET","/api/users/me",{query:{fields:"id,login"}}),n={id:r.id??r.login??"me",login:r.login??null};return _.currentUserByInstance[e.instance]=n,n},xt=async(e)=>{let t=await gt(e),r=new Map;for(let o=0;o<5000;o+=100){let s=await E(e,"GET","/api/admin/projects",{query:{fields:"id,name,shortName,leader(id),team(allUsersGroup,users(id,login))",$top:"100",$skip:String(o)}});for(let i of s)if(i.id)r.set(i.id,i);if(s.length<100)break}let n=[...r.values()].map((o)=>{let s=o.team,i=o.leader?.id===t.id,a="unknown";if(i)a="edit";else if(s&&Array.isArray(s.users))a=s.allUsersGroup===!0||s.users.some((c)=>c.id===t.id||c.login===t.login)?"edit":"read";return{...w(o),access:a}});return I.set(e.instance,n),H=e.instance,_.knownProjects[e.instance]=n,_.lastInstance=e.instance,await Pe(),n},f=async(e)=>{let t=await xt(e);return se(t,F(e.instance),_.selectedByInstance[e.instance]??[]).map(({id:n,key:o,name:s})=>({id:n,key:o,name:s}))},Lt=async(e,t)=>{if((I.get(e.instance)??[]).length===0)await f(e);let r=(I.get(e.instance)??[]).find((n)=>n.id===t);if(!r)throw new u(`Unknown YouTrack project ${t}.`,404);return`project: ${U(r.key??r.name)}`},Gt=async()=>{let e=H??Object.keys(_.selectedByInstance)[0]??null;if((e?await Nt(e):!1)===!1)return{connected:!1,instance:null,projects:[],mode:e?F(e):"all",selected:e?_.selectedByInstance[e]??[]:[],user:null,needsLoad:!0};let r=e?I.get(e)??[]:[];return{connected:!0,instance:e,projects:r,mode:e?F(e):"all",selected:e?_.selectedByInstance[e]??[]:[],user:e?_.currentUserByInstance[e]??null:null,needsLoad:!e||r.length===0}},bt=async(e)=>{let t=ie(e,H);if(!t)return null;let r=new Set((I.get(t.instance)??[]).map((o)=>o.id)),n=ae(t,r);if(!n)return null;return _.modeByInstance[n.instance]=n.mode,_.selectedByInstance[n.instance]=n.selected,await Pe(),{instance:n.instance,mode:n.mode,selected:n.selected}},Ne=async(e,t)=>{let r=`${e.instance}\x00${t}`,n=fe.get(r);if(n)return n;let o=[];try{o=((await E(e,"GET",`/api/admin/projects/${d(t)}/customFields`,{query:{fields:"id,name,field(name),bundle(values(id,name,isResolved))"}})).find((a)=>(a.bundle?.values??[]).some(D))?.bundle?.values??[]).map((a,c)=>k(a,c))}catch(s){if(!(s instanceof u&&(s.status===403||s.status===404)))throw s}if(o.length===0)o=await Dt(e,t);return fe.set(r,o),o},Dt=async(e,t)=>{let r=(await f(e)).find((i)=>i.id===t);if(!r)return[];let n=r.key??r.name,o=await E(e,"GET","/api/issues",{query:{query:`project: ${/\s/.test(n)?`{${n}}`:n}`,$top:"100",fields:"id,customFields(name,value(id,name,isResolved))"}}),s=new Map;for(let i of o){let a=R(i).value;if(a?.name)s.set(a.name,a)}return[...s.values()].map((i,a)=>k(i,a))},wt=async(e,t,r)=>{if(t==="all")return null;if(t==="open")return"#Unresolved";if(t==="done")return"#Resolved";let o=["triage","backlog","todo","in-progress","canceled"].find((a)=>a===t);if(!o)return"#Unresolved";if(!r)return L(o);let i=(await Ne(e,r)).filter((a)=>a.category===o).map((a)=>a.name);return Te(i)??L(o)},kt={"auth.probe":async(e)=>{let t=await ye.request(e.handle,{method:"GET",path:"/api/config",query:{fields:"version"},headers:{accept:"application/json"}});if(t.status!==200)return{supported:!1,message:`${e.instance} answered ${t.status} to /api/config.`};try{return typeof JSON.parse(t.body).version==="string"?{supported:!0}:{supported:!1,message:`${e.instance} does not look like a YouTrack server.`}}catch{return{supported:!1,message:`${e.instance} did not answer with JSON.`}}},"auth.verify":async(e)=>{let t=await E(e,"GET","/api/users/me",{query:{fields:"id,login,name,fullName,email,avatarUrl"}});_.currentUserByInstance[e.instance]={id:t.id??t.login??"me",login:t.login??null};try{await f(e)}catch(s){console.error(`[youtrack] could not preload projects: ${s instanceof Error?s.message:String(s)}`)}let r={id:t.id??t.login??"me",login:t.login??null},n=t.fullName??t.name;if(n)r.name=n;let o=b(e.instance,t.avatarUrl);if(o)r.avatarUrl=o;return{account:r}},"items.list":async(e,t)=>{let r=Math.max(0,Number(t.cursor??"0")||0),n=[];if(t.containerId)n.push(await Lt(e,t.containerId));else{let S=_e(await f(e));if(S)n.push(S)}let o=await wt(e,t.state,t.containerId);if(o)n.push(o);let s=Ee(t.people);if(s)n.push(s);let i=le(t.priority);if(i)n.push(i);if(t.query?.trim())n.push(t.query.trim());let a={fields:p,$top:String(Ae),$skip:String(r)};if(n.length>0)a.query=n.join(" and ");let c=await E(e,"GET","/api/issues",{query:a}),l=c.length>=Ae;return{items:c.map((S)=>h(e.instance,S)),cursor:l?String(r+c.length):null,hasMore:l}},"items.get":async(e,t)=>{let r=await v(E(e,"GET",`/api/issues/${d(t.id)}`,{query:{fields:G}}));return{item:r?y(e.instance,r):null}},"items.updateState":async(e,t)=>{let r=await E(e,"GET",`/api/issues/${d(t.id)}`,{query:{fields:`id,idReadable,${p}`}}),n=R(r),o=await E(e,"POST",`/api/issues/${d(t.id)}`,{query:{fields:p},body:{customFields:[{name:n.name,value:{name:t.stateId}}]}});if(R(o).value?.name===t.stateId)return{item:y(e.instance,o)};await E(e,"POST","/api/commands",{query:{fields:"id"},body:{query:`${n.name} ${/\s/.test(t.stateId)?`{${t.stateId}}`:t.stateId}`,issues:[{idReadable:r.idReadable??t.id}]}});let s=await E(e,"GET",`/api/issues/${d(t.id)}`,{query:{fields:G}});return{item:y(e.instance,s)}},"items.liveSummaries":async(e,t)=>{let r=[],n=[...t.identifiers],o=Array.from({length:Math.min(5,n.length)},async()=>{for(;;){let s=n.shift();if(!s)return;let i=await v(E(e,"GET",`/api/issues/${d(s)}`,{query:{fields:p}}));if(i)r.push(Oe(e.instance,i))}});return await Promise.all(o),{items:r}},"states.list":async(e,t)=>({states:await Ne(e,t.containerId)}),"containers.list":async(e)=>({containers:await f(e)}),"comments.create":async(e,t)=>{let r=await v(E(e,"POST",`/api/issues/${d(t.identifier)}/comments`,{query:{fields:"id,text"},body:{text:t.body}}));return{comment:r?{id:r.id}:null}}},vt=(e)=>{let t={message:e.message.slice(0,M)||"Unexpected failure"};if(e instanceof O){if(e.status>=400&&e.status<=599)t.status=e.status;if(/^[A-Z_]{1,64}$/.test(e.code))t.code=e.code}else if(e instanceof u)t.status=e.status;return t},Ft=async(e,t,r)=>{try{return{ok:!0,data:await kt[e](t,r)}}catch(n){return{ok:!1,error:vt(n instanceof Error?n:Error(String(n)))}}},T=(e,t,r)=>{e.writeHead(t,{"Content-Type":"application/json"}),e.end(JSON.stringify(r))},Ie=(e)=>new Promise((t,r)=>{let n="";e.on("data",(o)=>{n+=o}),e.on("end",()=>t(n)),e.on("error",r)}),Xt=mt.createServer((e,t)=>{if(e.headers.authorization!==`Bearer ${he}`){T(t,401,{error:"unauthorized"});return}let r=new URL(e.url??"/","http://127.0.0.1");if(r.pathname==="/health"){T(t,200,{ok:!0});return}if(r.pathname==="/projects"){if(e.method==="GET"){Gt().then((n)=>T(t,200,n)).catch(()=>T(t,500,{error:"could not read the project list"}));return}if(e.method==="PUT"){Ie(e).then(async(n)=>{let o=await bt(n);if(!o){T(t,400,{error:"invalid-selection"});return}T(t,200,o)}).catch(()=>T(t,500,{error:"could not read the request"}));return}T(t,405,{error:"method-not-allowed"});return}if(r.pathname!==N||e.method!=="POST"){T(t,404,{error:"not-found"});return}Ie(e).then(async(n)=>{let o=g(n);if(!o){T(t,400,{error:"not a tracker call this service understands"});return}T(t,200,await Ft(o.method,{instance:o.session.instance,handle:o.session.handle},o.input))}).catch(()=>T(t,500,{error:"could not read the request"}))});Xt.listen(Ue,"127.0.0.1");
+// service/main.ts
+import http from "node:http";
+// node_modules/@openchamber/sdk/dist/scrollbar-style.js
+var GUEST_SCROLLING_ATTRIBUTE = "data-oc-scrolling";
+var GUEST_SCROLLBAR_CSS = `
+:root {
+  /* Quiet at rest like the app's own thumbs; hover gives a clear grab target. */
+  --oc-scrollbar-thumb: color-mix(in srgb, var(--oc-muted, currentColor) 18%, transparent);
+  --oc-scrollbar-thumb-hover: color-mix(in srgb, var(--oc-muted, currentColor) 36%, transparent);
+  scrollbar-gutter: stable;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+:hover, [${GUEST_SCROLLING_ATTRIBUTE}] {
+  scrollbar-color: var(--oc-scrollbar-thumb) transparent;
+}
+/* Chromium's standard scrollbar properties otherwise override its pseudo-elements. */
+@supports selector(::-webkit-scrollbar) {
+  *, :hover, [${GUEST_SCROLLING_ATTRIBUTE}] { scrollbar-width: auto; scrollbar-color: auto; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; background: transparent; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 999px;
+    min-width: 24px;
+    min-height: 24px;
+  }
+  :hover::-webkit-scrollbar-thumb, [${GUEST_SCROLLING_ATTRIBUTE}]::-webkit-scrollbar-thumb { background: var(--oc-scrollbar-thumb); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--oc-scrollbar-thumb-hover); }
+  ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+}
+@media (forced-colors: active) {
+  *, :hover, [${GUEST_SCROLLING_ATTRIBUTE}] { scrollbar-color: auto; }
+  ::-webkit-scrollbar-thumb, ::-webkit-scrollbar-thumb:hover { background: CanvasText; }
+}
+`;
+function installGuestScrollbarActivity(doc) {
+  const root = doc.documentElement;
+  if (root.hasAttribute("data-oc-scrollbar-activity"))
+    return;
+  root.setAttribute("data-oc-scrollbar-activity", "");
+  const timers = new WeakMap;
+  doc.addEventListener("scroll", (event) => {
+    const target = event.target === doc ? root : event.target;
+    if (!(target instanceof Element))
+      return;
+    if (!target.hasAttribute("data-oc-scrolling"))
+      target.setAttribute("data-oc-scrolling", "");
+    const pending = timers.get(target);
+    if (pending !== undefined)
+      clearTimeout(pending);
+    timers.set(target, setTimeout(() => {
+      timers.delete(target);
+      target.removeAttribute("data-oc-scrolling");
+    }, 1000));
+  }, { capture: true, passive: true });
+}
+var GUEST_SCROLLBAR_SCRIPT = `(${installGuestScrollbarActivity.toString()})(document);`;
+// node_modules/@openchamber/sdk/dist/manifest.js
+var TRACKER_URL_TOKENS = ["{id}", "{segment}", "{segments+}"];
+var TRACKER_URL_TOKEN_SET = new Set(TRACKER_URL_TOKENS);
+// node_modules/@openchamber/sdk/dist/session-events.js
+var GUEST_SESSION_EVENT_TYPES = [
+  "turn-finished",
+  "turn-failed",
+  "permission-asked",
+  "question-asked",
+  "turn-started",
+  "session-created",
+  "session-archived",
+  "session-deleted"
+];
+var SESSION_EVENTS_PATH = "/session-events";
+var SESSION_EVENTS_WIRE_VERSION = 1;
+var SESSION_EVENTS_IDLE_MS = 10 * 60000;
+var EVENT_TYPES = new Set(GUEST_SESSION_EVENT_TYPES);
+var isGuestSessionEventType = (value) => EVENT_TYPES.has(value);
+var readSessionEventRequest = (body) => {
+  let wire;
+  try {
+    const parsed = JSON.parse(body);
+    if (Object(parsed) !== parsed || parsed === null)
+      return null;
+    wire = parsed;
+  } catch {
+    return null;
+  }
+  const { v, requestId, event, content } = wire;
+  if (v !== SESSION_EVENTS_WIRE_VERSION)
+    return null;
+  if (String(requestId) !== requestId || requestId.length === 0)
+    return null;
+  if (Object(event) !== event || event === undefined)
+    return null;
+  const { id, type, at, session, project, linked, permission, question } = event;
+  if (String(id) !== id || id.length === 0)
+    return null;
+  if (String(type) !== type || !isGuestSessionEventType(type))
+    return null;
+  if (!Number.isFinite(at))
+    return null;
+  if (Object(session) !== session || session === undefined)
+    return null;
+  const sessionId = session.id;
+  if (String(sessionId) !== sessionId || sessionId.length === 0)
+    return null;
+  const parentId = session.parentId;
+  if (parentId !== null && (String(parentId) !== parentId || parentId.length === 0))
+    return null;
+  if (Object(project) !== project || project === undefined)
+    return null;
+  const directory = project.directory;
+  if (directory !== null && (String(directory) !== directory || directory.length === 0))
+    return null;
+  if (!Array.isArray(linked))
+    return null;
+  const request = {
+    v: SESSION_EVENTS_WIRE_VERSION,
+    requestId,
+    event: { id, type, at: Number(at), session: { id: sessionId, parentId }, project: { directory }, linked }
+  };
+  if (permission !== undefined) {
+    if (Object(permission) !== permission)
+      return null;
+    const permissionRequestId = permission.requestId;
+    if (String(permissionRequestId) !== permissionRequestId || permissionRequestId.length === 0)
+      return null;
+    request.event.permission = { requestId: permissionRequestId };
+  }
+  if (question !== undefined) {
+    if (Object(question) !== question)
+      return null;
+    const { kind, id: questionId } = question;
+    if (kind !== "form" && kind !== "page")
+      return null;
+    if (String(questionId) !== questionId || questionId.length === 0)
+      return null;
+    request.event.question = { kind, id: questionId };
+  }
+  if (content !== undefined) {
+    if (Object(content) !== content || content.type !== type)
+      return null;
+    request.content = content;
+  }
+  return request;
+};
+// node_modules/@openchamber/sdk/dist/service-host.js
+var SERVICE_SCHEDULE_IDLE_MS = 10 * 60000;
+var MENTIONS_IDLE_MS = 10 * 60000;
+// node_modules/@openchamber/sdk/dist/file-editor.js
+var patternExpressions = new Map;
+// node_modules/@openchamber/sdk/dist/contract.js
+var GUEST_FILE_STAT_KINDS = ["file", "directory", "other", "missing"];
+var GUEST_GENERATE_LATE_KEEP_MS = 60 * 60000;
+var HOST_REQUEST_ERROR_CODES = [
+  "HOST_UNAVAILABLE",
+  "HOST_TIMEOUT",
+  "HOST_REJECTED",
+  "DISCONNECTED",
+  "DISABLED",
+  "BAD_PATH",
+  "NO_INTEGRATION",
+  "NO_SERVICE",
+  "SERVICE_FAILED",
+  "REQUEST_FAILED",
+  "RESPONSE_TOO_LARGE",
+  "NO_SESSION",
+  "SESSION_BUSY",
+  "NOT_GRANTED",
+  "NO_DIRECTORY",
+  "NOT_FOUND",
+  "FILE_TOO_LARGE",
+  "DENIED",
+  "NO_MODEL",
+  "MODEL_FAILED",
+  "UNSUPPORTED"
+];
+var SERVICE_STATUS_VALUES = ["stopped", "starting", "ready", "failed"];
+var hostRequestErrorCodeSet = new Set(HOST_REQUEST_ERROR_CODES);
+var serviceStatusSet = new Set(SERVICE_STATUS_VALUES);
+var fileStatKindSet = new Set(GUEST_FILE_STAT_KINDS);
+var HOST_PUSH_TYPES = new Set([
+  "workspace",
+  "shells",
+  "ready",
+  "directory",
+  "session",
+  "connection",
+  "settings",
+  "session-lifecycle",
+  "item",
+  "resolve",
+  "action",
+  "service-event",
+  "status-control-event",
+  "popover-closed",
+  "file-open",
+  "file-snapshot",
+  "file-saved",
+  "generate-late"
+]);
+// node_modules/@openchamber/sdk/dist/service-providers.js
+var BROWSER_CONTROL_ACTIONS = [
+  "browser.open",
+  "browser.snapshot",
+  "browser.click",
+  "browser.type",
+  "browser.select",
+  "browser.scroll",
+  "browser.back",
+  "browser.forward",
+  "browser.inspect",
+  "browser.capture",
+  "browser.resize",
+  "browser.close"
+];
+var BROWSER_PROVIDER_IDLE_MS = 10 * 60000;
+var CONTROL_ACTIONS = new Set(BROWSER_CONTROL_ACTIONS);
+var SOURCE_CONTROL_PROVIDER_IDLE_MS = 10 * 60000;
+var OPENCHAMBER_HOST_CALLBACK_URL = "OPENCHAMBER_HOST_CALLBACK_URL";
+var postOutbound = async (url, handle, request, timeoutMs, fail) => {
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${handle}`, "content-type": "application/json" },
+      body: JSON.stringify(request),
+      signal: AbortSignal.timeout(timeoutMs + 5000)
+    });
+  } catch (error) {
+    throw fail(`OpenChamber did not answer: ${error instanceof Error ? error.message : String(error)}`, "HOST_UNAVAILABLE", 0);
+  }
+  let answer;
+  try {
+    answer = Object(await response.json());
+  } catch {
+    throw fail("OpenChamber answered with something other than JSON", "HOST_UNAVAILABLE", response.status);
+  }
+  if (!response.ok) {
+    const message = answer.error?.message;
+    const code = answer.error?.code;
+    throw fail(String(message) === message && message.length > 0 ? message : `OpenChamber refused the request (${response.status})`, String(code) === code && code.length > 0 ? code : "OUTBOUND_REFUSED", response.status);
+  }
+  if (!Number.isSafeInteger(answer.status) || String(answer.body) !== answer.body) {
+    throw fail("OpenChamber relayed a malformed answer", "HOST_UNAVAILABLE", response.status);
+  }
+  const headers = {};
+  for (const [name, text] of Object.entries(Object(answer.headers ?? {}))) {
+    if (String(text) === text)
+      headers[name] = text;
+  }
+  return { status: Number(answer.status), headers, body: answer.body };
+};
+var NOTIFICATIONS_PROVIDER_IDLE_MS = 10 * 60000;
+var readNotificationsAccount = (account) => {
+  if (account === null)
+    return null;
+  if (Object(account) !== account || account === undefined)
+    return;
+  const { id, login } = account;
+  if (String(id) !== id || id.length === 0)
+    return;
+  if (login !== null && (String(login) !== login || login.length === 0))
+    return;
+  return { id, login };
+};
+var TRACKER_PROVIDER_PATH = "/tracker";
+var TRACKER_PROVIDER_WIRE_VERSION = 1;
+var TRACKER_PROVIDER_METHODS = [
+  "auth.probe",
+  "auth.verify",
+  "items.list",
+  "items.get",
+  "items.updateState",
+  "items.liveSummaries",
+  "states.list",
+  "containers.list",
+  "comments.create"
+];
+var TRACKER_PROVIDER_ERROR_MESSAGE_MAX = 2000;
+var TRACKER_PROVIDER_IDLE_MS = 10 * 60000;
+var TRACKER_OUTBOUND_PATH = "/tracker/outbound";
+var TRACKER_OUTBOUND_TIMEOUT_MS = 20000;
+var isTrackerProviderMethod = (value) => TRACKER_PROVIDER_METHODS.some((method) => method === value);
+var readTrackerProviderRequest = (body) => {
+  let wire;
+  try {
+    const parsed = JSON.parse(body);
+    if (Object(parsed) !== parsed || parsed === null)
+      return null;
+    wire = parsed;
+  } catch {
+    return null;
+  }
+  const { v, requestId, method, provider, session, input } = wire;
+  if (v !== TRACKER_PROVIDER_WIRE_VERSION)
+    return null;
+  if (String(requestId) !== requestId || requestId.length === 0)
+    return null;
+  if (String(provider) !== provider || provider.length === 0)
+    return null;
+  if (String(method) !== method || !isTrackerProviderMethod(method))
+    return null;
+  if (Object(input) !== input || Array.isArray(input))
+    return null;
+  if (Object(session) !== session || session === null || session === undefined)
+    return null;
+  const { instance, handle } = session;
+  if (String(instance) !== instance || instance.length === 0 || String(handle) !== handle || handle.length === 0)
+    return null;
+  const account = readNotificationsAccount(session.account);
+  if (account === undefined)
+    return null;
+  return { v: TRACKER_PROVIDER_WIRE_VERSION, requestId, method, provider, session: { instance, handle, account }, input };
+};
+
+class TrackerOutboundError extends Error {
+  code;
+  status;
+  constructor(message, code, status) {
+    super(message);
+    this.name = "TrackerOutboundError";
+    this.code = code;
+    this.status = status;
+  }
+}
+var createTrackerOutbound = ({ env }) => {
+  const base = env[OPENCHAMBER_HOST_CALLBACK_URL];
+  if (!base)
+    throw new Error(`${OPENCHAMBER_HOST_CALLBACK_URL} is not set: only a service that provides "tracker" can reach a tracker's server.`);
+  const url = `${base.replace(/\/+$/, "")}${TRACKER_OUTBOUND_PATH}`;
+  return {
+    request: (handle, request) => postOutbound(url, handle, request, TRACKER_OUTBOUND_TIMEOUT_MS, (message, code, status) => new TrackerOutboundError(message, code, status))
+  };
+};
+var QUOTA_PROVIDER_IDLE_MS = 10 * 60000;
+// node_modules/@openchamber/sdk/dist/service-surface.js
+var SURFACE_CONTROLLERS = ["none", "agent", "user"];
+var CONTROLLERS = new Set(SURFACE_CONTROLLERS);
+// service/mapping.ts
+var normaliseMineText = (value) => value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+var stripGitSuffix = (value) => value.replace(/\/+$/, "").replace(/\.git$/i, "");
+var repoIdentityOf = (value) => {
+  let text = value.trim();
+  if (!text)
+    return null;
+  const scp = /^[^@\s]+@[^:\s]+:(.+)$/.exec(text);
+  if (scp) {
+    text = scp[1] ?? "";
+  } else {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+      try {
+        text = new URL(text).pathname;
+      } catch {}
+    }
+    text = text.replace(/^\/+/, "");
+    const hosted = /^[a-z0-9.-]+\.[a-z]{2,}\/(.+)$/i.exec(text);
+    if (hosted)
+      text = hosted[1] ?? text;
+  }
+  const parts = stripGitSuffix(text).split(/[\\/]+/).filter((part) => part.length > 0);
+  if (parts.length === 0)
+    return null;
+  return parts.length >= 2 ? `${parts[parts.length - 2]}/${parts[parts.length - 1]}` : parts[0] ?? null;
+};
+var repoNameOf = (value) => {
+  const identity = repoIdentityOf(value);
+  if (!identity)
+    return null;
+  return identity.split("/").pop() ?? identity;
+};
+var formsOf = (value) => {
+  const trimmed = value.trim();
+  if (!trimmed)
+    return [];
+  const forms = [trimmed];
+  for (const form of [repoIdentityOf(trimmed), repoNameOf(trimmed)]) {
+    if (form && !forms.includes(form))
+      forms.push(form);
+  }
+  return forms;
+};
+var DESCRIPTION_JSON_KEYS = new Set([
+  "ocprojectname",
+  "githuburl",
+  "repourl",
+  "repositoryurl",
+  "gitremote",
+  "giturl",
+  "remoteurl",
+  "remote",
+  "reponame",
+  "repositoryname",
+  "projectname",
+  "project",
+  "repo",
+  "repository",
+  "youtrackproject",
+  "youtrackprojectkey",
+  "youtrackprojectid"
+]);
+var FENCED_BLOCK = /```[^\n]*\r?\n([\s\S]*?)```/g;
+var collectJsonValues = (value, out) => {
+  if (Array.isArray(value)) {
+    for (const item of value)
+      collectJsonValues(item, out);
+    return;
+  }
+  if (!value || typeof value !== "object")
+    return;
+  for (const [key, child] of Object.entries(value)) {
+    if (DESCRIPTION_JSON_KEYS.has(key.toLowerCase())) {
+      if (typeof child === "string" && child.trim())
+        out.push(child.trim());
+      if (Array.isArray(child)) {
+        for (const item of child) {
+          if (typeof item === "string" && item.trim())
+            out.push(item.trim());
+        }
+      }
+      continue;
+    }
+    collectJsonValues(child, out);
+  }
+};
+var jsonDescriptionValues = (description) => {
+  const values = [];
+  const blocks = [...description.matchAll(FENCED_BLOCK)].flatMap((match) => match[1] ? [match[1]] : []);
+  const trimmed = description.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("["))
+    blocks.push(trimmed);
+  for (const block of blocks) {
+    try {
+      collectJsonValues(JSON.parse(block), values);
+    } catch {}
+  }
+  return values;
+};
+var descriptionValues = (description) => {
+  if (!description)
+    return [];
+  return [...new Set(jsonDescriptionValues(description))];
+};
+var descriptionMatches = (description, hints) => {
+  const wanted = [...new Set(hints.flatMap(formsOf))].map(normaliseMineText);
+  if (wanted.length === 0)
+    return false;
+  const described = descriptionValues(description).flatMap(formsOf).map(normaliseMineText);
+  return wanted.some((form) => described.includes(form));
+};
+
+// service/project.ts
+import { execFile } from "node:child_process";
+import { basename, isAbsolute } from "node:path";
+
+// service/ttl-cache.ts
+var createTtlCache = (defaultTtlMs) => {
+  const entries = new Map;
+  return {
+    get: (key) => {
+      const entry = entries.get(key);
+      if (!entry)
+        return;
+      if (Date.now() - entry.at >= entry.ttl) {
+        entries.delete(key);
+        return;
+      }
+      return entry.value;
+    },
+    set: (key, value, ttlMs = defaultTtlMs) => {
+      entries.set(key, { at: Date.now(), ttl: ttlMs, value });
+    },
+    delete: (key) => {
+      entries.delete(key);
+    }
+  };
+};
+
+// service/project.ts
+var GIT_ANSWER_TTL_MS = 5 * 60000;
+var runGit = (directory, args) => new Promise((resolve, reject) => {
+  execFile("git", ["-C", directory, ...args], { timeout: 3000, maxBuffer: 64 * 1024 }, (error, stdout) => {
+    if (error)
+      reject(error);
+    else
+      resolve(String(stdout).trim());
+  });
+});
+var remoteCache = createTtlCache(GIT_ANSWER_TTL_MS);
+var rootCache = createTtlCache(GIT_ANSWER_TTL_MS);
+var gitIdentityOf = async (directory) => {
+  if (!directory || !isAbsolute(directory) || directory.includes("\x00"))
+    return null;
+  const cached = remoteCache.get(directory);
+  if (cached !== undefined)
+    return cached;
+  let remote = "";
+  try {
+    remote = await runGit(directory, ["remote", "get-url", "origin"]);
+  } catch {}
+  if (!remote) {
+    try {
+      const names = (await runGit(directory, ["remote"])).split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
+      if (names[0])
+        remote = await runGit(directory, ["remote", "get-url", names[0]]);
+    } catch {}
+  }
+  const value = remote ? { remote, repo: repoNameOf(remote) } : null;
+  remoteCache.set(directory, value);
+  return value;
+};
+var projectRootOf = async (directory) => {
+  if (!directory || !isAbsolute(directory) || directory.includes("\x00"))
+    return null;
+  const cached = rootCache.get(directory);
+  if (cached !== undefined)
+    return cached;
+  let value = null;
+  try {
+    const output = await runGit(directory, ["worktree", "list", "--porcelain"]);
+    const first = output.split(/\r?\n/).find((line) => line.startsWith("worktree "));
+    if (first)
+      value = first.slice("worktree ".length).trim() || null;
+  } catch {}
+  value ??= directory;
+  rootCache.set(directory, value);
+  return value;
+};
+var textOf = (input, key) => {
+  if (!input || typeof input !== "object")
+    return null;
+  const value = input[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+};
+var hintsOf = async (directory, projectName) => {
+  const hints = [];
+  const folder = directory ? basename(directory) : "";
+  if (folder)
+    hints.push({ value: folder });
+  if (projectName)
+    hints.push({ value: projectName });
+  const git = await gitIdentityOf(directory);
+  if (git?.remote)
+    hints.push({ value: git.remote });
+  if (git?.repo)
+    hints.push({ value: git.repo });
+  return hints;
+};
+var scopeOf = async (input, fallback) => {
+  const requested = textOf(input, "directory") ?? textOf(input, "projectPath") ?? fallback;
+  const directory = await projectRootOf(requested);
+  const projectName = textOf(input, "projectName");
+  return { directory, projectName, hints: await hintsOf(directory, projectName) };
+};
+
+// service/session-scope.ts
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { isAbsolute as isAbsolute2, join } from "node:path";
+var dataDir = process.env.OPENCHAMBER_SERVICE_DATA_DIR?.trim() || null;
+var file = dataDir ? join(dataDir, "session-scope.json") : null;
+var latest = null;
+var latestSessionDirectory = () => latest;
+var rememberSessionDirectory = (directory) => {
+  if (!directory || !isAbsolute2(directory) || directory.includes("\x00"))
+    return;
+  latest = directory;
+  if (!file)
+    return;
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(file, JSON.stringify({ directory }));
+  } catch (error) {
+    console.error(`[youtrack] could not save the session folder: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+if (file) {
+  try {
+    const stored = JSON.parse(readFileSync(file, "utf8"));
+    if (typeof stored.directory === "string" && isAbsolute2(stored.directory)) {
+      latest = stored.directory;
+    }
+  } catch {}
+}
+
+// service/query.ts
+var quoteTerm = (term) => /\s/.test(term) ? `{${term}}` : term;
+var valueListQuery = (field, names) => `${field}: ${names.map(quoteTerm).join(", ")}`;
+var projectQuery = (containers) => {
+  const terms = containers.map((container) => container.key ?? container.name).filter((term) => Boolean(term));
+  if (terms.length === 0)
+    return null;
+  return `project: ${terms.map(quoteTerm).join(", ")}`;
+};
+var PRIORITY_QUERY = {
+  urgent: ["Show-stopper", "Critical", "Blocker"],
+  high: ["Major", "High"],
+  medium: ["Normal", "Medium"],
+  low: ["Minor", "Low"]
+};
+var priorityFilterQuery = (priority) => {
+  if (priority === "all" || priority === "none")
+    return null;
+  const names = PRIORITY_QUERY[priority];
+  if (!names)
+    return null;
+  return valueListQuery("Priority", names);
+};
+var peopleFilterQuery = (people) => {
+  if (people === "me")
+    return "for: me";
+  if (people === "created")
+    return "created by: me";
+  return null;
+};
+var stateNameQuery = (names) => names.length === 0 ? null : valueListQuery("State", names);
+var categoryFallback = (category) => category === "canceled" ? "#Resolved" : "#Unresolved";
+
+// service/youtrack.ts
+var ISSUE_FIELDS = [
+  "id",
+  "idReadable",
+  "summary",
+  "description",
+  "created",
+  "updated",
+  "resolved",
+  "project(id,name,shortName)",
+  "tags(id,name,color(id))",
+  "customFields(name,value(id,name,isResolved,login,fullName,avatarUrl))"
+].join(",");
+var ISSUE_FIELDS_WITH_COMMENTS = `${ISSUE_FIELDS},comments(id,text,created,author(id,login,name,fullName,avatarUrl))`;
+var iso = (ms) => typeof ms === "number" && Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+var absolute = (instance, url) => {
+  if (!url)
+    return null;
+  if (/^https?:\/\//i.test(url))
+    return url;
+  return `${instance}${url.startsWith("/") ? "" : "/"}${url}`;
+};
+var single = (value) => {
+  if (Array.isArray(value))
+    return value[0] ?? null;
+  return value ?? null;
+};
+var fieldNamed = (issue, name) => {
+  const field = issue.customFields?.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
+  return single(field?.value);
+};
+var isStateValue = (value) => Object(value) === value && !Array.isArray(value) && typeof value.isResolved === "boolean";
+var stateOf = (issue) => {
+  for (const field of issue.customFields ?? []) {
+    const candidates = Array.isArray(field.value) ? field.value : [field.value];
+    const state = candidates.find(isStateValue);
+    if (state)
+      return { name: field.name, value: state };
+  }
+  return { name: "State", value: null };
+};
+var categoryOf = (name, isResolved) => {
+  const text = (name ?? "").trim().toLowerCase();
+  if (/won'?t fix|cancel|duplicate|obsolete|rejected|declined|invalid/.test(text))
+    return "canceled";
+  if (isResolved === true)
+    return "done";
+  if (!text)
+    return null;
+  if (/backlog|icebox/.test(text))
+    return "backlog";
+  if (/triage|inbox/.test(text))
+    return "triage";
+  if (/in progress|in review|review|testing|\bqa\b|doing|started|in dev|development|implement|pending/.test(text))
+    return "in-progress";
+  if (/to ?do|todo|submitted|open|new|ready|approved/.test(text))
+    return "todo";
+  return "todo";
+};
+var COMMON_STATE_NAMES = [
+  "Triage",
+  "Inbox",
+  "Backlog",
+  "Icebox",
+  "Submitted",
+  "Open",
+  "New",
+  "Ready",
+  "Approved",
+  "To Do",
+  "In Progress",
+  "In Review",
+  "Review",
+  "Testing",
+  "QA",
+  "Doing",
+  "Started",
+  "In Development",
+  "Pending Deploy",
+  "Won't fix",
+  "Duplicate",
+  "Obsolete",
+  "Rejected",
+  "Declined",
+  "Invalid"
+];
+var commonStateNames = (category) => COMMON_STATE_NAMES.filter((name) => categoryOf(name, false) === category);
+var PRIORITY_BY_NAME = {
+  "show-stopper": "urgent",
+  showstopper: "urgent",
+  blocker: "urgent",
+  critical: "urgent",
+  highest: "urgent",
+  major: "high",
+  high: "high",
+  normal: "medium",
+  medium: "medium",
+  minor: "low",
+  low: "low",
+  lowest: "low",
+  "no priority": "none",
+  none: "none"
+};
+var priorityOf = (name) => {
+  if (!name)
+    return "none";
+  return PRIORITY_BY_NAME[name.trim().toLowerCase()] ?? "none";
+};
+var personOf = (instance, value) => {
+  if (!value)
+    return null;
+  const name = ("fullName" in value ? value.fullName : undefined) ?? value.name ?? value.login ?? null;
+  if (!name)
+    return null;
+  return { name, avatarUrl: absolute(instance, value.avatarUrl) };
+};
+var toContainer = (project) => ({
+  id: project.id,
+  key: project.shortName ?? project.name ?? null,
+  name: project.name ?? project.shortName ?? project.id
+});
+var toSummary = (instance, raw) => {
+  const identifier = (raw.idReadable ?? raw.id).toUpperCase();
+  const state = stateOf(raw);
+  const priority = fieldNamed(raw, "priority");
+  const assignee = fieldNamed(raw, "assignee");
+  return {
+    id: raw.id,
+    identifier,
+    title: raw.summary ?? identifier,
+    url: `${instance}/issue/${encodeURIComponent(identifier)}`,
+    state: state.value ? {
+      id: state.value.id ?? null,
+      name: state.value.name ?? "",
+      category: categoryOf(state.value.name, state.value.isResolved)
+    } : null,
+    priority: priorityOf(priority?.name),
+    labels: (raw.tags ?? []).map((tag) => ({
+      id: tag.id,
+      name: tag.name ?? tag.id,
+      color: tag.color?.id ?? null
+    })),
+    assignee: personOf(instance, assignee),
+    container: raw.project ? toContainer(raw.project) : null,
+    updatedAt: iso(raw.updated)
+  };
+};
+var toComment = (instance, raw) => ({
+  id: raw.id,
+  body: raw.text ?? "",
+  createdAt: iso(raw.created),
+  author: personOf(instance, raw.author)
+});
+var toItem = (instance, raw) => ({
+  ...toSummary(instance, raw),
+  description: raw.description ?? null,
+  comments: (raw.comments ?? []).map((comment) => toComment(instance, comment))
+});
+var toWorkflowState = (value, position) => ({
+  id: value.name ?? value.id ?? `state-${position}`,
+  name: value.name ?? value.id ?? `State ${position}`,
+  category: categoryOf(value.name, value.isResolved),
+  position
+});
+var toLiveSummary = (instance, raw) => {
+  const summary = toSummary(instance, raw);
+  return {
+    identifier: summary.identifier,
+    title: summary.title,
+    state: { name: summary.state?.name ?? "Open", category: summary.state?.category ?? "todo" }
+  };
+};
+
+// service/main.ts
+var port = Number(process.env.OPENCHAMBER_SERVICE_PORT);
+var serviceToken = process.env.OPENCHAMBER_SERVICE_TOKEN ?? "";
+if (!port || !serviceToken) {
+  console.error("OPENCHAMBER_SERVICE_PORT and OPENCHAMBER_SERVICE_TOKEN are required");
+  process.exit(1);
+}
+var outbound = createTrackerOutbound({ env: process.env });
+var PAGE_SIZE = 40;
+var cacheKey = (call, ...parts) => [call.instance, call.accountId || `handle:${call.handle}`, ...parts].join("\x00");
+
+class CallError extends Error {
+  status;
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
+var serverFailure = (response) => {
+  if (response.status === 401)
+    return new CallError("YouTrack refused the credential.", 401);
+  let message = `YouTrack answered ${response.status}.`;
+  try {
+    const parsed = JSON.parse(response.body);
+    const detail = parsed.error_description ?? parsed.error ?? parsed.message;
+    if (detail)
+      message = `YouTrack answered ${response.status}: ${detail}`;
+  } catch {}
+  return new CallError(message, response.status);
+};
+var api = async (call, method, path, options = {}) => {
+  const response = await outbound.request(call.handle, {
+    method,
+    path,
+    query: options.query,
+    headers: options.body ? { accept: "application/json", "content-type": "application/json" } : { accept: "application/json" },
+    body: options.body ? JSON.stringify(options.body) : undefined
+  });
+  if (response.status >= 400)
+    throw serverFailure(response);
+  try {
+    const data = JSON.parse(response.body);
+    return data;
+  } catch {
+    throw new CallError("YouTrack answered with something other than JSON.", 502);
+  }
+};
+var orNull = async (request) => {
+  try {
+    return await request;
+  } catch (error) {
+    if (error instanceof CallError && error.status === 404)
+      return null;
+    throw error;
+  }
+};
+var seg = encodeURIComponent;
+var PROJECTS_TTL_MS = 5 * 60000;
+var PROJECTS_RETRY_MS = 30000;
+var PROJECTS_CACHE = createTtlCache(PROJECTS_TTL_MS);
+var PROJECTS_INFLIGHT = new Map;
+var ALL_CONTAINERS = new Map;
+var readProjects = async (call) => {
+  const projects = new Map;
+  for (let skip = 0;skip < 5000; skip += 100) {
+    const page = await api(call, "GET", "/api/admin/projects", {
+      query: {
+        fields: "id,name,shortName",
+        $top: "100",
+        $skip: String(skip)
+      }
+    });
+    for (const project of page) {
+      if (project.id)
+        projects.set(project.id, project);
+    }
+    if (page.length < 100)
+      break;
+  }
+  return [...projects.values()].map(toContainer);
+};
+var loadProjects = async (call) => {
+  const key = cacheKey(call);
+  const cached = PROJECTS_CACHE.get(key);
+  if (cached !== undefined)
+    return cached;
+  const inflight = PROJECTS_INFLIGHT.get(key);
+  if (inflight)
+    return inflight;
+  const request = (async () => {
+    try {
+      const all = await readProjects(call);
+      PROJECTS_CACHE.set(key, all);
+      ALL_CONTAINERS.set(key, all);
+      return all;
+    } catch (error) {
+      console.error(`[youtrack] could not read the project list: ${error instanceof Error ? error.message : String(error)}`);
+      const fallback = PROJECTS_CACHE.get(key) ?? ALL_CONTAINERS.get(key) ?? [];
+      PROJECTS_CACHE.set(key, fallback, PROJECTS_RETRY_MS);
+      return fallback;
+    } finally {
+      PROJECTS_INFLIGHT.delete(key);
+    }
+  })();
+  PROJECTS_INFLIGHT.set(key, request);
+  return request;
+};
+var containerFilterQuery = async (call, containerId) => {
+  const key = cacheKey(call);
+  const known = ALL_CONTAINERS.get(key) ?? [];
+  let container = known.find((entry) => entry.id === containerId);
+  if (!container) {
+    await loadProjects(call);
+    container = (ALL_CONTAINERS.get(key) ?? []).find((entry) => entry.id === containerId);
+  }
+  if (container)
+    return `project: ${quoteTerm(container.key ?? container.name)}`;
+  try {
+    const project = await orNull(api(call, "GET", `/api/admin/projects/${seg(containerId)}`, { query: { fields: "id,name,shortName" } }));
+    if (project)
+      return `project: ${quoteTerm(project.shortName ?? project.name ?? containerId)}`;
+  } catch (error) {
+    if (!(error instanceof CallError))
+      throw error;
+  }
+  throw new CallError(`Unknown YouTrack project ${containerId}.`, 404);
+};
+var ISSUE_MAPPING_TTL_MS = 60000;
+var ISSUE_MAPPING_CACHE = createTtlCache(ISSUE_MAPPING_TTL_MS);
+var issueMappingOf = async (call, scope) => {
+  if (scope.hints.length === 0)
+    return null;
+  const key = cacheKey(call, scope.directory ?? "", scope.projectName ?? "");
+  const cached = ISSUE_MAPPING_CACHE.get(key);
+  if (cached !== undefined)
+    return cached;
+  const values = scope.hints.map((hint) => hint.value).filter(Boolean);
+  const terms = [...new Set(scope.hints.map((hint) => repoNameOf(hint.value) ?? hint.value.trim()).filter((term) => term.length >= 3))];
+  const projects = new Map;
+  const matchedTerms = new Set;
+  for (const term of terms) {
+    try {
+      const issues = await api(call, "GET", "/api/issues", {
+        query: {
+          query: term,
+          $top: "20",
+          fields: "id,idReadable,project(id,shortName,name),description"
+        }
+      });
+      for (const issue of issues) {
+        if (!issue.project?.id)
+          continue;
+        if (!descriptionMatches(issue.description, values))
+          continue;
+        projects.set(issue.project.id, toContainer(issue.project));
+        matchedTerms.add(term);
+      }
+    } catch (error) {
+      if (error instanceof CallError && (error.status === 403 || error.status === 404))
+        continue;
+      throw error;
+    }
+  }
+  const value = {
+    projects: [...projects.values()],
+    terms: [...matchedTerms]
+  };
+  ISSUE_MAPPING_CACHE.set(key, value);
+  return value;
+};
+var STATE_NAMES_CACHE = new Map;
+var loadStates = async (call, containerId) => {
+  const stateKey = cacheKey(call, containerId);
+  const cached = STATE_NAMES_CACHE.get(stateKey);
+  if (cached)
+    return cached;
+  let states = [];
+  try {
+    const fields = await api(call, "GET", `/api/admin/projects/${seg(containerId)}/customFields`, { query: { fields: "id,name,field(name),bundle(values(id,name,isResolved))" } });
+    const stateField = fields.find((field) => (field.bundle?.values ?? []).some(isStateValue));
+    states = (stateField?.bundle?.values ?? []).map((value, position) => toWorkflowState(value, position));
+  } catch (error) {
+    if (!(error instanceof CallError && (error.status === 403 || error.status === 404)))
+      throw error;
+  }
+  if (states.length === 0)
+    states = await observedStates(call, containerId);
+  STATE_NAMES_CACHE.set(stateKey, states);
+  return states;
+};
+var observedStates = async (call, containerId) => {
+  const container = (await loadProjects(call)).find((entry) => entry.id === containerId);
+  if (!container)
+    return [];
+  const term = container.key ?? container.name;
+  const issues = await api(call, "GET", "/api/issues", {
+    query: {
+      query: `project: ${/\s/.test(term) ? `{${term}}` : term}`,
+      $top: "100",
+      fields: "id,customFields(name,value(id,name,isResolved))"
+    }
+  });
+  const byName = new Map;
+  for (const issue of issues) {
+    const value = stateOf(issue).value;
+    if (value?.name)
+      byName.set(value.name, value);
+  }
+  return [...byName.values()].map((value, position) => toWorkflowState(value, position));
+};
+var MAX_STATE_CONTAINERS = 40;
+var statesForAll = async (call, containers) => {
+  const queue = [...containers];
+  const states = [];
+  const workers = Array.from({ length: Math.min(6, queue.length) }, async () => {
+    for (;; ) {
+      const next = queue.shift();
+      if (!next)
+        return;
+      try {
+        states.push(...await loadStates(call, next.id));
+      } catch (error) {
+        console.error(`[youtrack] could not read the workflow of ${next.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  });
+  await Promise.all(workers);
+  return states;
+};
+var stateFilterQuery = async (call, filter, containerId, containers) => {
+  if (filter === "all")
+    return null;
+  if (filter === "open")
+    return "#Unresolved";
+  if (filter === "done")
+    return "#Resolved";
+  const categories = ["triage", "backlog", "todo", "in-progress", "canceled"];
+  const category = categories.find((value) => value === filter);
+  if (!category)
+    return "#Unresolved";
+  if (containerId) {
+    const states = await loadStates(call, containerId);
+    const names = states.filter((state) => state.category === category).map((state) => state.name);
+    return stateNameQuery(names) ?? categoryFallback(category);
+  }
+  const visible = containers ?? await loadProjects(call);
+  if (visible.length > MAX_STATE_CONTAINERS) {
+    return stateNameQuery(commonStateNames(category)) ?? categoryFallback(category);
+  }
+  const states = await statesForAll(call, visible);
+  const names = [...new Set(states.filter((state) => state.category === category).map((state) => state.name))];
+  return stateNameQuery(names) ?? categoryFallback(category);
+};
+var handlers = {
+  "auth.probe": async (call) => {
+    const response = await outbound.request(call.handle, {
+      method: "GET",
+      path: "/api/config",
+      query: { fields: "version" },
+      headers: { accept: "application/json" }
+    });
+    if (response.status !== 200) {
+      return { supported: false, message: `${call.instance} answered ${response.status} to /api/config.` };
+    }
+    try {
+      const config = JSON.parse(response.body);
+      return typeof config.version === "string" ? { supported: true } : { supported: false, message: `${call.instance} does not look like a YouTrack server.` };
+    } catch {
+      return { supported: false, message: `${call.instance} did not answer with JSON.` };
+    }
+  },
+  "auth.verify": async (call) => {
+    const me = await api(call, "GET", "/api/users/me", { query: { fields: "id,login,name,fullName,email,avatarUrl" } });
+    const account = {
+      id: me.id ?? me.login ?? "me",
+      login: me.login ?? null
+    };
+    const name = me.fullName ?? me.name;
+    if (name)
+      account.name = name;
+    const avatarUrl = absolute(call.instance, me.avatarUrl);
+    if (avatarUrl)
+      account.avatarUrl = avatarUrl;
+    return { account };
+  },
+  "items.list": async (call, input) => {
+    const skip = Math.max(0, Number(input.cursor ?? "0") || 0);
+    const parts = [];
+    const scope = await scopeOf(input, latestSessionDirectory());
+    const mapping = await issueMappingOf(call, scope);
+    const mapped = !input.containerId && mapping && mapping.projects.length > 0 ? mapping : null;
+    if (input.containerId) {
+      parts.push(await containerFilterQuery(call, input.containerId));
+    } else if (mapped) {
+      const scope = projectQuery(mapped.projects);
+      if (scope)
+        parts.push(scope);
+    } else {
+      const scope = projectQuery(await loadProjects(call));
+      if (scope)
+        parts.push(scope);
+    }
+    const metadataTerm = mapped ? mapped.terms.find((term) => !/\s/.test(term)) ?? mapped.terms[0] ?? null : null;
+    if (metadataTerm)
+      parts.push(metadataTerm);
+    const stateQuery = await stateFilterQuery(call, input.state, input.containerId, input.containerId ? null : mapped?.projects ?? null);
+    if (stateQuery)
+      parts.push(stateQuery);
+    const peopleQuery = peopleFilterQuery(input.people);
+    if (peopleQuery)
+      parts.push(peopleQuery);
+    const priorityQuery = priorityFilterQuery(input.priority);
+    if (priorityQuery)
+      parts.push(priorityQuery);
+    if (input.query?.trim())
+      parts.push(input.query.trim());
+    const query = {
+      fields: ISSUE_FIELDS,
+      $top: String(PAGE_SIZE),
+      $skip: String(skip)
+    };
+    if (parts.length > 0)
+      query.query = parts.join(" and ");
+    const page = await api(call, "GET", "/api/issues", { query });
+    const items = metadataTerm && scope.hints.length > 0 ? page.filter((issue) => descriptionMatches(issue.description, scope.hints.map((hint) => hint.value))) : page;
+    const hasMore = page.length >= PAGE_SIZE;
+    return {
+      items: items.map((issue) => toSummary(call.instance, issue)),
+      cursor: hasMore ? String(skip + page.length) : null,
+      hasMore
+    };
+  },
+  "items.get": async (call, input) => {
+    const issue = await orNull(api(call, "GET", `/api/issues/${seg(input.id)}`, { query: { fields: ISSUE_FIELDS_WITH_COMMENTS } }));
+    return { item: issue ? toItem(call.instance, issue) : null };
+  },
+  "items.updateState": async (call, input) => {
+    const current = await api(call, "GET", `/api/issues/${seg(input.id)}`, { query: { fields: `id,idReadable,${ISSUE_FIELDS}` } });
+    const field = stateOf(current);
+    const updated = await api(call, "POST", `/api/issues/${seg(input.id)}`, {
+      query: { fields: ISSUE_FIELDS },
+      body: { customFields: [{ name: field.name, value: { name: input.stateId } }] }
+    });
+    if (stateOf(updated).value?.name === input.stateId) {
+      return { item: toItem(call.instance, updated) };
+    }
+    await api(call, "POST", "/api/commands", {
+      query: { fields: "id" },
+      body: {
+        query: `${field.name} ${/\s/.test(input.stateId) ? `{${input.stateId}}` : input.stateId}`,
+        issues: [{ idReadable: current.idReadable ?? input.id }]
+      }
+    });
+    const again = await api(call, "GET", `/api/issues/${seg(input.id)}`, { query: { fields: ISSUE_FIELDS_WITH_COMMENTS } });
+    return { item: toItem(call.instance, again) };
+  },
+  "items.liveSummaries": async (call, input) => {
+    const items = [];
+    const queue = [...input.identifiers];
+    const workers = Array.from({ length: Math.min(5, queue.length) }, async () => {
+      for (;; ) {
+        const next = queue.shift();
+        if (!next)
+          return;
+        const issue = await orNull(api(call, "GET", `/api/issues/${seg(next)}`, { query: { fields: ISSUE_FIELDS } }));
+        if (issue)
+          items.push(toLiveSummary(call.instance, issue));
+      }
+    });
+    await Promise.all(workers);
+    return { items };
+  },
+  "states.list": async (call, input) => ({
+    states: await loadStates(call, input.containerId)
+  }),
+  "containers.list": async (call, input) => {
+    const scope = await scopeOf(input, latestSessionDirectory());
+    if (scope.directory || scope.projectName) {
+      try {
+        await issueMappingOf(call, scope);
+      } catch (error) {
+        console.error(`[youtrack] could not resolve the project mapping: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return { containers: await loadProjects(call) };
+  },
+  "comments.create": async (call, input) => {
+    const comment = await orNull(api(call, "POST", `/api/issues/${seg(input.identifier)}/comments`, { query: { fields: "id,text" }, body: { text: input.body } }));
+    return { comment: comment ? { id: comment.id } : null };
+  }
+};
+var failureOf = (error) => {
+  const failure = {
+    message: error.message.slice(0, TRACKER_PROVIDER_ERROR_MESSAGE_MAX) || "Unexpected failure"
+  };
+  if (error instanceof TrackerOutboundError) {
+    if (error.status >= 400 && error.status <= 599)
+      failure.status = error.status;
+    if (/^[A-Z_]{1,64}$/.test(error.code))
+      failure.code = error.code;
+  } else if (error instanceof CallError) {
+    failure.status = error.status;
+  }
+  return failure;
+};
+var answer = async (method, call, input) => {
+  try {
+    const data = await handlers[method](call, input);
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, error: failureOf(error instanceof Error ? error : new Error(String(error))) };
+  }
+};
+var send = (res, status, body) => {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body));
+};
+var readBody = (req) => new Promise((resolve, reject) => {
+  let body = "";
+  req.on("data", (chunk) => {
+    body += chunk;
+  });
+  req.on("end", () => resolve(body));
+  req.on("error", reject);
+});
+var server = http.createServer((req, res) => {
+  if (req.headers.authorization !== `Bearer ${serviceToken}`) {
+    send(res, 401, { error: "unauthorized" });
+    return;
+  }
+  const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  if (url.pathname === "/health") {
+    send(res, 200, { ok: true });
+    return;
+  }
+  if (url.pathname === SESSION_EVENTS_PATH && req.method === "POST") {
+    readBody(req).then((body) => {
+      const event = readSessionEventRequest(body);
+      if (!event) {
+        send(res, 400, { ok: false, error: "not a session event this service understands" });
+        return;
+      }
+      const directory = event.event.project.directory;
+      const topLevel = event.event.session.parentId === null;
+      if (topLevel && (event.event.type === "turn-started" || event.event.type === "session-created") && directory) {
+        rememberSessionDirectory(directory);
+      }
+      send(res, 200, { ok: true });
+    }).catch(() => send(res, 500, { ok: false, error: "could not read the event" }));
+    return;
+  }
+  if (url.pathname !== TRACKER_PROVIDER_PATH || req.method !== "POST") {
+    send(res, 404, { error: "not-found" });
+    return;
+  }
+  readBody(req).then(async (body) => {
+    const request = readTrackerProviderRequest(body);
+    if (!request) {
+      send(res, 400, { error: "not a tracker call this service understands" });
+      return;
+    }
+    send(res, 200, await answer(request.method, {
+      instance: request.session.instance,
+      handle: request.session.handle,
+      accountId: request.session.account?.id ?? ""
+    }, request.input));
+  }).catch(() => send(res, 500, { error: "could not read the request" }));
+});
+server.listen(port, "127.0.0.1");

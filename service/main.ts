@@ -7,23 +7,21 @@
  * shapes. It never sees a credential: every request goes through OpenChamber's
  * outbound proxy with the call's handle.
  *
- * The service also owns the project selection used by the rail panel. The
- * selection is stored under the user's OpenChamber config directory; the host
- * calls /projects through its service proxy.
- *
- * The seven reads and two writes are documented in
- * .opencode/skills/openchamber-extensions/references/youtrack-feasibility.md.
+ * There is no rail panel. A host that supports repository scoping passes the
+ * project's `directory` (and optionally its name) on
+ * `items.list`/`containers.list`; the service reads that folder's git remote,
+ * finds the issue whose description carries the matching fenced JSON, and
+ * scopes the list to that issue's project.
  */
 import http from 'node:http';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 
 import {
+  SESSION_EVENTS_PATH,
   TRACKER_PROVIDER_ERROR_MESSAGE_MAX,
   TRACKER_PROVIDER_PATH,
   TrackerOutboundError,
   createTrackerOutbound,
+  readSessionEventRequest,
   readTrackerProviderRequest,
   type SourceControlJsonObject,
   type SourceControlOutboundResponse,
@@ -39,18 +37,13 @@ import {
 } from '@openchamber/sdk';
 
 import {
-  emptyPanelState,
-  knownProjectsOf,
-  modeOf,
-  parseSelectionRequest,
-  restrictSelection,
-  visibleProjects,
-  type PanelMode,
-  type PanelProject,
-  type PanelState,
-  type PanelUser,
-  type ProjectAccess,
-} from './panel-state.ts';
+  descriptionMatches,
+  repoNameOf,
+  type IssueMapping,
+} from './mapping.ts';
+import { scopeOf, type ProjectScope } from './project.ts';
+import { latestSessionDirectory, rememberSessionDirectory } from './session-scope.ts';
+import { createTtlCache } from './ttl-cache.ts';
 import {
   categoryFallback,
   peopleFilterQuery,
@@ -63,6 +56,7 @@ import {
   ISSUE_FIELDS,
   ISSUE_FIELDS_WITH_COMMENTS,
   absolute,
+  commonStateNames,
   isStateValue,
   stateOf,
   toContainer,
@@ -87,94 +81,6 @@ if (!port || !serviceToken) {
 
 const outbound = createTrackerOutbound({ env: process.env });
 
-// The rail panel's project selection. One list per YouTrack instance, so a
-// later multi-account setup does not mix them. The last known project list is
-// kept too, so the panel is usable right after a service restart without
-// waiting for the board to call the provider again.
-const CONFIG_DIR =
-  process.platform === 'win32' && process.env.APPDATA
-    ? join(process.env.APPDATA, 'openchamber')
-    : join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'openchamber');
-const CONFIG_PATH = join(CONFIG_DIR, 'youtrack-extension-projects.json');
-// OpenChamber's own tracker account store. The service reads only the account
-// status from it, never the credential, to tell whether the disconnected panel
-// is still showing a cached project list.
-const TRACKER_ACCOUNTS_PATH = join(CONFIG_DIR, 'tracker-accounts.json');
-const TRACKER_PROVIDER_ID = 'ext-youtrack';
-
-type HostTrackerAccounts = {
-  trackers?: Record<string, {
-    instance?: string | null;
-    accounts?: Array<{ status?: string | null }> | null;
-  }>;
-};
-
-/**
- * Whether OpenChamber still has a valid account for `instance`. `null` means
- * the account store could not be read, so the cached project list is left
- * alone; a readable store with no valid account means disconnected.
- */
-const hostAccountState = async (instance: string): Promise<boolean | null> => {
-  try {
-    const parsed = JSON.parse(
-      await readFile(TRACKER_ACCOUNTS_PATH, 'utf8'),
-    ) as HostTrackerAccounts;
-    const tracker = parsed.trackers?.[TRACKER_PROVIDER_ID];
-    if (!tracker) return false;
-    const storedInstance = typeof tracker.instance === 'string' ? tracker.instance : null;
-    if (storedInstance && storedInstance !== instance) return false;
-    const accounts = Array.isArray(tracker.accounts) ? tracker.accounts : [];
-    return accounts.some((account) => account && account.status !== 'invalid');
-  } catch {
-    return null;
-  }
-};
-
-let panelState: PanelState = emptyPanelState();
-try {
-  const parsed = JSON.parse(await readFile(CONFIG_PATH, 'utf8')) as Partial<PanelState>;
-  if (parsed && typeof parsed.selectedByInstance === 'object') {
-    panelState = {
-      selectedByInstance: parsed.selectedByInstance,
-      modeByInstance:
-        typeof parsed.modeByInstance === 'object' && parsed.modeByInstance ? parsed.modeByInstance : {},
-      knownProjects: knownProjectsOf(parsed.knownProjects),
-      currentUserByInstance:
-        typeof parsed.currentUserByInstance === 'object' && parsed.currentUserByInstance
-          ? parsed.currentUserByInstance
-          : {},
-      lastInstance: typeof parsed.lastInstance === 'string' ? parsed.lastInstance : null,
-    };
-  }
-} catch {
-  // First run: no selection file yet.
-}
-
-/** Older files have no mode; a non-empty selection means it was in use. */
-const modeOfInstance = (instance: string): PanelMode => modeOf(panelState, instance);
-
-const ALL_CONTAINERS = new Map<string, PanelProject[]>(
-  Object.entries(panelState.knownProjects),
-);
-let lastInstance: string | null = panelState.lastInstance;
-let savedStateJson = JSON.stringify(panelState);
-let writeChain: Promise<void> = Promise.resolve();
-
-const savePanelState = (): Promise<void> => {
-  const serialized = JSON.stringify(panelState);
-  if (serialized === savedStateJson) return writeChain;
-  writeChain = writeChain.then(async () => {
-    try {
-      await mkdir(CONFIG_DIR, { recursive: true });
-      await writeFile(CONFIG_PATH, `${serialized}\n`);
-      savedStateJson = serialized;
-    } catch (error) {
-      console.error(`[youtrack] could not save the project selection: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  });
-  return writeChain;
-};
-
 // ---------------------------------------------------------------------------
 // The service's calls to YouTrack.
 
@@ -182,7 +88,15 @@ const savePanelState = (): Promise<void> => {
 const PAGE_SIZE = 40;
 
 /** Who a call is for: the server it reaches and the handle that reaches it. */
-type Call = { instance: string; handle: string };
+type Call = { instance: string; handle: string; accountId: string };
+
+/**
+ * Cache scope: the server and the account, never the server alone. A call
+ * without an account gets a per-call scope, so it cannot reuse another
+ * account's data.
+ */
+const cacheKey = (call: Call, ...parts: string[]): string =>
+  [call.instance, call.accountId || `handle:${call.handle}`, ...parts].join('\u0000');
 
 /** A failed call, answered as `{ ok: false, error }` with this status. */
 class CallError extends Error {
@@ -245,28 +159,17 @@ const orNull = async <T,>(request: Promise<T>): Promise<T | null> => {
 const seg = encodeURIComponent;
 
 // ---------------------------------------------------------------------------
-// Search filters. YouTrack has no neutral category names, so a category filter
-// is resolved to this project's own state names.
+// The project list. The native mapping UI and the board read it; a failed read
+// keeps the last good list, or answers none so no project filter is sent.
 
-const STATE_NAMES_CACHE = new Map<string, TrackerProviderWorkflowState[]>();
+const PROJECTS_TTL_MS = 5 * 60_000;
+const PROJECTS_RETRY_MS = 30_000;
 
-const currentUserFor = async (call: Call): Promise<PanelUser> => {
-  const known = panelState.currentUserByInstance[call.instance];
-  if (known) return known;
+const PROJECTS_CACHE = createTtlCache<TrackerProviderContainer[]>(PROJECTS_TTL_MS);
+const PROJECTS_INFLIGHT = new Map<string, Promise<TrackerProviderContainer[]>>();
+const ALL_CONTAINERS = new Map<string, TrackerProviderContainer[]>();
 
-  const me = await api<YtUser>(
-    call,
-    'GET',
-    '/api/users/me',
-    { query: { fields: 'id,login' } },
-  );
-  const user = { id: me.id ?? me.login ?? 'me', login: me.login ?? null };
-  panelState.currentUserByInstance[call.instance] = user;
-  return user;
-};
-
-const loadProjects = async (call: Call): Promise<PanelProject[]> => {
-  const user = await currentUserFor(call);
+const readProjects = async (call: Call): Promise<TrackerProviderContainer[]> => {
   const projects = new Map<string, YtProject>();
   for (let skip = 0; skip < 5000; skip += 100) {
     const page = await api<YtProject[]>(
@@ -275,7 +178,7 @@ const loadProjects = async (call: Call): Promise<PanelProject[]> => {
       '/api/admin/projects',
       {
         query: {
-          fields: 'id,name,shortName,leader(id),team(allUsersGroup,users(id,login))',
+          fields: 'id,name,shortName',
           $top: '100',
           $skip: String(skip),
         },
@@ -286,109 +189,129 @@ const loadProjects = async (call: Call): Promise<PanelProject[]> => {
     }
     if (page.length < 100) break;
   }
-
-  const all = [...projects.values()].map((project) => {
-    const team = project.team;
-    const isLeader = project.leader?.id === user.id;
-    let access: ProjectAccess = 'unknown';
-    if (isLeader) {
-      access = 'edit';
-    } else if (team && Array.isArray(team.users)) {
-      access =
-        team.allUsersGroup === true
-        || team.users.some((member) => member.id === user.id || member.login === user.login)
-          ? 'edit'
-          : 'read';
-    }
-    return { ...toContainer(project), access };
-  });
-
-  ALL_CONTAINERS.set(call.instance, all);
-  lastInstance = call.instance;
-  panelState.knownProjects[call.instance] = all;
-  panelState.lastInstance = call.instance;
-  await savePanelState();
-  return all;
+  return [...projects.values()].map(toContainer);
 };
 
-const loadContainers = async (call: Call): Promise<TrackerProviderContainer[]> => {
-  const all = await loadProjects(call);
-  const visible = visibleProjects(
-    all,
-    modeOfInstance(call.instance),
-    panelState.selectedByInstance[call.instance] ?? [],
-  );
-  return visible.map(({ id, key, name }) => ({ id, key, name }));
+const loadProjects = async (call: Call): Promise<TrackerProviderContainer[]> => {
+  const key = cacheKey(call);
+  const cached = PROJECTS_CACHE.get(key);
+  if (cached !== undefined) return cached;
+
+  const inflight = PROJECTS_INFLIGHT.get(key);
+  if (inflight) return inflight;
+
+  const request = (async () => {
+    try {
+      const all = await readProjects(call);
+      PROJECTS_CACHE.set(key, all);
+      ALL_CONTAINERS.set(key, all);
+      return all;
+    } catch (error) {
+      console.error(
+        `[youtrack] could not read the project list: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      const fallback = PROJECTS_CACHE.get(key)
+        ?? ALL_CONTAINERS.get(key)
+        ?? [];
+      PROJECTS_CACHE.set(key, fallback, PROJECTS_RETRY_MS);
+      return fallback;
+    } finally {
+      PROJECTS_INFLIGHT.delete(key);
+    }
+  })();
+  PROJECTS_INFLIGHT.set(key, request);
+  return request;
 };
 
 const containerFilterQuery = async (call: Call, containerId: string): Promise<string> => {
-  if ((ALL_CONTAINERS.get(call.instance) ?? []).length === 0) {
-    await loadContainers(call);
+  const key = cacheKey(call);
+  const known = ALL_CONTAINERS.get(key) ?? [];
+  let container = known.find((entry) => entry.id === containerId);
+  if (!container) {
+    await loadProjects(call);
+    container = (ALL_CONTAINERS.get(key) ?? []).find((entry) => entry.id === containerId);
   }
-  // Explicit container ids are not limited by the panel selection: a tracked
-  // item or a deep link from another project still reads, while only the
-  // unscoped list and the Group picker are filtered.
-  const container = (ALL_CONTAINERS.get(call.instance) ?? []).find((entry) => entry.id === containerId);
-  if (!container) throw new CallError(`Unknown YouTrack project ${containerId}.`, 404);
-  return `project: ${quoteTerm(container.key ?? container.name)}`;
+  if (container) return `project: ${quoteTerm(container.key ?? container.name)}`;
+
+  // The list may be unavailable (an issue-scoped token can be refused the
+  // admin endpoint). Read the one project by id before giving up.
+  try {
+    const project = await orNull(api<YtProject>(
+      call,
+      'GET',
+      `/api/admin/projects/${seg(containerId)}`,
+      { query: { fields: 'id,name,shortName' } },
+    ));
+    if (project) return `project: ${quoteTerm(project.shortName ?? project.name ?? containerId)}`;
+  } catch (error) {
+    if (!(error instanceof CallError)) throw error;
+  }
+  throw new CallError(`Unknown YouTrack project ${containerId}.`, 404);
 };
 
 // ---------------------------------------------------------------------------
-// The rail panel's project selector. The panel reads and writes through
-// OpenChamber's service proxy; nothing here needs the YouTrack credential.
+// The issue-description mapping. Folder and git probing live in project.ts.
 
-const projectsAnswer = async () => {
-  const instance = lastInstance ?? Object.keys(panelState.selectedByInstance)[0] ?? null;
-  const connected = instance ? await hostAccountState(instance) : false;
-  if (connected === false) {
-    // The account is gone: do not keep showing the last known projects.
-    return {
-      connected: false,
-      instance: null,
-      projects: [],
-      mode: (instance ? modeOfInstance(instance) : 'all') as PanelMode,
-      selected: instance ? panelState.selectedByInstance[instance] ?? [] : [],
-      user: null,
-      needsLoad: true,
-    };
+/** How long an issue-description mapping is reused. */
+const ISSUE_MAPPING_TTL_MS = 60_000;
+const ISSUE_MAPPING_CACHE = createTtlCache<IssueMapping>(ISSUE_MAPPING_TTL_MS);
+
+const issueMappingOf = async (
+  call: Call,
+  scope: ProjectScope,
+): Promise<IssueMapping | null> => {
+  if (scope.hints.length === 0) return null;
+  const key = cacheKey(call, scope.directory ?? '', scope.projectName ?? '');
+  const cached = ISSUE_MAPPING_CACHE.get(key);
+  if (cached !== undefined) return cached;
+
+  const values = scope.hints.map((hint) => hint.value).filter(Boolean);
+  const terms = [...new Set(
+    scope.hints
+      .map((hint) => repoNameOf(hint.value) ?? hint.value.trim())
+      .filter((term) => term.length >= 3),
+  )];
+  const projects = new Map<string, TrackerProviderContainer>();
+  const matchedTerms = new Set<string>();
+
+  for (const term of terms) {
+    try {
+      const issues = await api<YtIssue[]>(call, 'GET', '/api/issues', {
+        query: {
+          query: term,
+          $top: '20',
+          fields: 'id,idReadable,project(id,shortName,name),description',
+        },
+      });
+      for (const issue of issues) {
+        if (!issue.project?.id) continue;
+        if (!descriptionMatches(issue.description, values)) continue;
+        projects.set(issue.project.id, toContainer(issue.project));
+        matchedTerms.add(term);
+      }
+    } catch (error) {
+      if (error instanceof CallError && (error.status === 403 || error.status === 404)) continue;
+      throw error;
+    }
   }
-  const projects = instance ? ALL_CONTAINERS.get(instance) ?? [] : [];
-  return {
-    connected: true,
-    instance,
-    projects,
-    mode: (instance ? modeOfInstance(instance) : 'all') as PanelMode,
-    selected: instance ? panelState.selectedByInstance[instance] ?? [] : [],
-    user: instance ? panelState.currentUserByInstance[instance] ?? null : null,
-    needsLoad: !instance || projects.length === 0,
+
+  const value: IssueMapping = {
+    projects: [...projects.values()],
+    terms: [...matchedTerms],
   };
+  ISSUE_MAPPING_CACHE.set(key, value);
+  return value;
 };
 
-const saveProjects = async (
-  body: string,
-): Promise<{ instance: string; mode: PanelMode; selected: string[] } | null> => {
-  const parsed = parseSelectionRequest(body, lastInstance);
-  if (!parsed) return null;
+// ---------------------------------------------------------------------------
+// Search filters. YouTrack has no neutral category names, so a category filter
+// is resolved to this project's own state names.
 
-  // The selection outlives the mode. "Show all" is a visibility switch, not a
-  // reset: the projects the user picked are kept so switching back to
-  // "selected" restores them, and the panel keeps showing them ticked.
-  const valid = new Set(
-    (ALL_CONTAINERS.get(parsed.instance) ?? []).map((container) => container.id),
-  );
-  const saved = restrictSelection(parsed, valid);
-  if (!saved) return null;
-
-  panelState.modeByInstance[saved.instance] = saved.mode;
-  panelState.selectedByInstance[saved.instance] = saved.selected;
-  await savePanelState();
-  return { instance: saved.instance, mode: saved.mode, selected: saved.selected };
-};
-
+const STATE_NAMES_CACHE = new Map<string, TrackerProviderWorkflowState[]>();
 
 const loadStates = async (call: Call, containerId: string): Promise<TrackerProviderWorkflowState[]> => {
-  const cacheKey = `${call.instance}\u0000${containerId}`;
-  const cached = STATE_NAMES_CACHE.get(cacheKey);
+  const stateKey = cacheKey(call, containerId);
+  const cached = STATE_NAMES_CACHE.get(stateKey);
   if (cached) return cached;
 
   // The project-fields endpoint is the precise answer, but it is an admin
@@ -408,7 +331,7 @@ const loadStates = async (call: Call, containerId: string): Promise<TrackerProvi
   }
 
   if (states.length === 0) states = await observedStates(call, containerId);
-  STATE_NAMES_CACHE.set(cacheKey, states);
+  STATE_NAMES_CACHE.set(stateKey, states);
   return states;
 };
 
@@ -417,7 +340,7 @@ const observedStates = async (
   call: Call,
   containerId: string,
 ): Promise<TrackerProviderWorkflowState[]> => {
-  const container = (await loadContainers(call)).find((entry) => entry.id === containerId);
+  const container = (await loadProjects(call)).find((entry) => entry.id === containerId);
   if (!container) return [];
 
   const term = container.key ?? container.name;
@@ -437,10 +360,50 @@ const observedStates = async (
   return [...byName.values()].map((value, position) => toWorkflowState(value, position));
 };
 
+/**
+ * The workflow states of every visible project, a few projects at a time. One
+ * unreadable workflow is left out; it must not fail the whole list.
+ */
+const MAX_STATE_CONTAINERS = 40;
+
+const statesForAll = async (
+  call: Call,
+  containers: TrackerProviderContainer[],
+): Promise<TrackerProviderWorkflowState[]> => {
+  const queue = [...containers];
+  const states: TrackerProviderWorkflowState[] = [];
+  const workers = Array.from({ length: Math.min(6, queue.length) }, async () => {
+    for (;;) {
+      const next = queue.shift();
+      if (!next) return;
+      try {
+        states.push(...await loadStates(call, next.id));
+      } catch (error) {
+        console.error(
+          `[youtrack] could not read the workflow of ${next.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  });
+  await Promise.all(workers);
+  return states;
+};
+
+/**
+ * A neutral category as the project's own state names.
+ *
+ * On an unscoped "All containers" list the board sends no `containerId`, so
+ * the category is resolved across every visible project. The union is safe: a
+ * state name keeps its category in every project that shares it, and the
+ * project scope beside this clause already limits the answer to those
+ * projects. Above 40 visible projects the common workflow names keep the read
+ * to one query.
+ */
 const stateFilterQuery = async (
   call: Call,
   filter: string,
   containerId: string | null,
+  containers: TrackerProviderContainer[] | null,
 ): Promise<string | null> => {
   if (filter === 'all') return null;
   if (filter === 'open') return '#Unresolved';
@@ -450,10 +413,21 @@ const stateFilterQuery = async (
   const category = categories.find((value) => value === filter);
   if (!category) return '#Unresolved';
 
-  if (!containerId) return categoryFallback(category);
+  if (containerId) {
+    const states = await loadStates(call, containerId);
+    const names = states.filter((state) => state.category === category).map((state) => state.name);
+    return stateNameQuery(names) ?? categoryFallback(category);
+  }
 
-  const states = await loadStates(call, containerId);
-  const names = states.filter((state) => state.category === category).map((state) => state.name);
+  const visible = containers ?? await loadProjects(call);
+  if (visible.length > MAX_STATE_CONTAINERS) {
+    return stateNameQuery(commonStateNames(category)) ?? categoryFallback(category);
+  }
+
+  const states = await statesForAll(call, visible);
+  const names = [...new Set(
+    states.filter((state) => state.category === category).map((state) => state.name),
+  )];
   return stateNameQuery(names) ?? categoryFallback(category);
 };
 
@@ -497,20 +471,6 @@ const handlers: Handlers = {
       '/api/users/me',
       { query: { fields: 'id,login,name,fullName,email,avatarUrl' } },
     );
-    // Use the handle from connecting the account to fill the panel's project
-    // list. Without this, the panel has nothing to show until the board (or
-    // another tracker call) asks for the containers at least once.
-    panelState.currentUserByInstance[call.instance] = {
-      id: me.id ?? me.login ?? 'me',
-      login: me.login ?? null,
-    };
-    try {
-      await loadContainers(call);
-    } catch (error) {
-      console.error(
-        `[youtrack] could not preload projects: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
     const account: TrackerProviderDataByMethod['auth.verify']['account'] = {
       id: me.id ?? me.login ?? 'me',
       login: me.login ?? null,
@@ -526,13 +486,40 @@ const handlers: Handlers = {
     const skip = Math.max(0, Number(input.cursor ?? '0') || 0);
     const parts: string[] = [];
 
+    // The host may pass the open folder. When it does not, the latest
+    // top-level session event supplies it. A worktree is resolved to its main
+    // checkout before its name becomes a mapping hint.
+    const scope = await scopeOf(input, latestSessionDirectory());
+    const mapping = await issueMappingOf(call, scope);
+    // An explicit container read is the board's own scope. The repository
+    // filter applies only to the all-containers list.
+    const mapped = !input.containerId && mapping && mapping.projects.length > 0 ? mapping : null;
+
     if (input.containerId) {
       parts.push(await containerFilterQuery(call, input.containerId));
+    } else if (mapped) {
+      const scope = projectQuery(mapped.projects);
+      if (scope) parts.push(scope);
     } else {
-      const scope = projectQuery(await loadContainers(call));
+      const scope = projectQuery(await loadProjects(call));
       if (scope) parts.push(scope);
     }
-    const stateQuery = await stateFilterQuery(call, input.state, input.containerId);
+
+    // Only the issues whose description carries the repo's JSON are repo
+    // specific; the metadata issue's project is the scope, not every issue in
+    // it. The search term narrows the server side; the description check
+    // below is the explicit-schema gate.
+    const metadataTerm = mapped
+      ? mapped.terms.find((term) => !/\s/.test(term)) ?? mapped.terms[0] ?? null
+      : null;
+    if (metadataTerm) parts.push(metadataTerm);
+
+    const stateQuery = await stateFilterQuery(
+      call,
+      input.state,
+      input.containerId,
+      input.containerId ? null : mapped?.projects ?? null,
+    );
     if (stateQuery) parts.push(stateQuery);
     const peopleQuery = peopleFilterQuery(input.people);
     if (peopleQuery) parts.push(peopleQuery);
@@ -548,9 +535,15 @@ const handlers: Handlers = {
     if (parts.length > 0) query.query = parts.join(' and ');
 
     const page = await api<YtIssue[]>(call, 'GET', '/api/issues', { query });
+    const items = metadataTerm && scope.hints.length > 0
+      ? page.filter((issue) => descriptionMatches(
+          issue.description,
+          scope.hints.map((hint) => hint.value),
+        ))
+      : page;
     const hasMore = page.length >= PAGE_SIZE;
     return {
-      items: page.map((issue) => toSummary(call.instance, issue)),
+      items: items.map((issue) => toSummary(call.instance, issue)),
       cursor: hasMore ? String(skip + page.length) : null,
       hasMore,
     };
@@ -642,7 +635,23 @@ const handlers: Handlers = {
     states: await loadStates(call, input.containerId),
   }),
 
-  'containers.list': async (call) => ({ containers: await loadContainers(call) }),
+  'containers.list': async (call, input) => {
+    // The native mapping UI and the board both read this. A directory on the
+    // call, or the latest session folder, warms the issue-description cache so
+    // the following items.list does not repeat the search; the container list
+    // itself stays complete.
+    const scope = await scopeOf(input, latestSessionDirectory());
+    if (scope.directory || scope.projectName) {
+      try {
+        await issueMappingOf(call, scope);
+      } catch (error) {
+        console.error(
+          `[youtrack] could not resolve the project mapping: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    return { containers: await loadProjects(call) };
+  },
 
   'comments.create': async (call, input) => {
     const comment = await orNull(api<YtComment>(
@@ -712,27 +721,24 @@ const server = http.createServer((req, res) => {
     send(res, 200, { ok: true });
     return;
   }
-  if (url.pathname === '/projects') {
-    if (req.method === 'GET') {
-      projectsAnswer()
-        .then((answer) => send(res, 200, answer))
-        .catch(() => send(res, 500, { error: 'could not read the project list' }));
-      return;
-    }
-    if (req.method === 'PUT') {
-      readBody(req)
-        .then(async (body) => {
-          const saved = await saveProjects(body);
-          if (!saved) {
-            send(res, 400, { error: 'invalid-selection' });
-            return;
-          }
-          send(res, 200, saved);
-        })
-        .catch(() => send(res, 500, { error: 'could not read the request' }));
-      return;
-    }
-    send(res, 405, { error: 'method-not-allowed' });
+  if (url.pathname === SESSION_EVENTS_PATH && req.method === 'POST') {
+    readBody(req).then((body) => {
+      const event = readSessionEventRequest(body);
+      if (!event) {
+        send(res, 400, { ok: false, error: 'not a session event this service understands' });
+        return;
+      }
+      const directory = event.event.project.directory;
+      const topLevel = event.event.session.parentId === null;
+      if (
+        topLevel
+        && (event.event.type === 'turn-started' || event.event.type === 'session-created')
+        && directory
+      ) {
+        rememberSessionDirectory(directory);
+      }
+      send(res, 200, { ok: true });
+    }).catch(() => send(res, 500, { ok: false, error: 'could not read the event' }));
     return;
   }
   if (url.pathname !== TRACKER_PROVIDER_PATH || req.method !== 'POST') {
@@ -747,7 +753,11 @@ const server = http.createServer((req, res) => {
     }
     send(res, 200, await answer(
       request.method,
-      { instance: request.session.instance, handle: request.session.handle },
+      {
+        instance: request.session.instance,
+        handle: request.session.handle,
+        accountId: request.session.account?.id ?? '',
+      },
       request.input,
     ));
   }).catch(() => send(res, 500, { error: 'could not read the request' }));
