@@ -13,6 +13,7 @@
     "build": "openchamber-guest-bundle --node service/main.ts service/main.js",
     "typecheck": "tsc --noEmit",
     "test": "bun run build && bun run typecheck && bun test",
+    "check": "openchamber-guest-check",
     "verify": "bun run build && git diff --exit-code -- service/main.js",
     "package": "bun run scripts/package.ts",
     "bump": "bun run scripts/bump.ts"

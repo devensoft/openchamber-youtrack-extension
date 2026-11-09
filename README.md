@@ -82,6 +82,7 @@ use the native project mapping under **Settings → Integrations** instead.
 bun install
 bun run build
 bun run test
+bun run check
 bun run verify
 bun run package
 ```

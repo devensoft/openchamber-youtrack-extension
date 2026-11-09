@@ -32,6 +32,7 @@ Single-context. See `docs/agents/domain.md`.
 bun install
 bun run build          # bundles service/main.ts -> service/main.js
 bun run test           # build + tsc --noEmit + bun test (fake YouTrack)
+bun run check          # openchamber-guest-check on the package
 bun run verify         # build + fail when service/main.js is stale
 bun run package        # dist/<name>-v<version>.zip + .sha256
 bun run bump patch|minor|major
