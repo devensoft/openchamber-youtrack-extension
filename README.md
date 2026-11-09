@@ -61,9 +61,20 @@ fenced block with an optional language tag:
 
 The native mapping under **Settings → Integrations** still lists every
 YouTrack project. The Issues and PRs board lists every project by default.
-The composer's **Link YouTrack Issue** picker is scoped to the repository when
-the host passes the open project directory. An explicit project selection is
-not repository-filtered.
+The composer's **Link YouTrack Issue** picker is scoped when the service has a
+folder: either the host-provided directory or the latest top-level session
+folder. An explicit project selection is not repository-filtered.
+
+An unscoped To do or In progress filter asks each visible project for its own
+state names. Above 40 visible projects it uses the common YouTrack workflow
+names to stay inside the list deadline; a custom workflow with different names
+may not match in that large-project case.
+
+## Upgrading from 0.1
+
+The rail panel and its `youtrack-extension-projects.json` selection are gone.
+The old selection is not migrated because there is no panel selection any more;
+use the native project mapping under **Settings → Integrations** instead.
 
 ## Development
 

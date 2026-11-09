@@ -95,12 +95,17 @@ bun run bump patch|minor|major
   listener that plays OpenChamber's outbound proxy. Add a wire test for every
   call and filter you touch.
 - State categories are per-project. Infer them from `isResolved` plus the state
-  name; user overrides are a later feature.
+  name; user overrides are a later feature. State names are not hardcoded
+  except the documented `commonStateNames` fallback used when more than 40
+  visible projects would make per-project workflow reads exceed the list
+  deadline.
 - No panel. The service does not read or write
   `youtrack-extension-projects.json`, `/projects`, or
   `tracker-accounts.json`; the host owns the account and the native mapping.
-  `containers.list` returns every project, and an explicit `containerId`
-  read is not scoped by the repository filter.
+  The old 0.1 panel selection is not migrated: the panel is gone, so the
+  selection is superseded by native project mapping. `containers.list` returns
+  every project, and an explicit `containerId` read is not scoped by the
+  repository filter.
 - The service reads the native project folder's git remote with
   `git -C <folder> remote get-url origin` (then the first remote), cached for
   five minutes. The folder basename, the native project name, the git remote
@@ -148,8 +153,9 @@ bun run bump patch|minor|major
 
 ## CI and release
 
-- `.github/workflows/ci.yml` is repo-owned and read-only. It runs the tests and
-  the committed-bundle check on pull requests and `main`.
+- `.github/workflows/ci.yml` is repo-owned. It runs the tests, the
+  committed-bundle check and `openchamber-guest-check` on pull requests and
+  `main`.
 - `.github/workflows/release.yml` is manual. After the bump is on `main` it
   tests, verifies `service/main.js`, tags `v{version}`, packages the runtime
   files and attaches the zip to the release when `package.json` is greater

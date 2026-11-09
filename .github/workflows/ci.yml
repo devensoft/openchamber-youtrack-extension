@@ -33,4 +33,4 @@ jobs:
         run: bun run verify
 
       - name: Check the extension package
-        run: bunx openchamber-guest-check
+        run: openchamber-guest-check
