@@ -1,7 +1,8 @@
 // service/main.ts
 import http from "node:http";
 import { execFile } from "node:child_process";
-import { basename, isAbsolute } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, isAbsolute, join } from "node:path";
 // node_modules/@openchamber/sdk/dist/scrollbar-style.js
 var GUEST_SCROLLING_ATTRIBUTE = "data-oc-scrolling";
 var GUEST_SCROLLBAR_CSS = `
@@ -75,8 +76,80 @@ var GUEST_SESSION_EVENT_TYPES = [
   "session-archived",
   "session-deleted"
 ];
+var SESSION_EVENTS_PATH = "/session-events";
+var SESSION_EVENTS_WIRE_VERSION = 1;
 var SESSION_EVENTS_IDLE_MS = 10 * 60000;
 var EVENT_TYPES = new Set(GUEST_SESSION_EVENT_TYPES);
+var isGuestSessionEventType = (value) => EVENT_TYPES.has(value);
+var readSessionEventRequest = (body) => {
+  let wire;
+  try {
+    const parsed = JSON.parse(body);
+    if (Object(parsed) !== parsed || parsed === null)
+      return null;
+    wire = parsed;
+  } catch {
+    return null;
+  }
+  const { v, requestId, event, content } = wire;
+  if (v !== SESSION_EVENTS_WIRE_VERSION)
+    return null;
+  if (String(requestId) !== requestId || requestId.length === 0)
+    return null;
+  if (Object(event) !== event || event === undefined)
+    return null;
+  const { id, type, at, session, project, linked, permission, question } = event;
+  if (String(id) !== id || id.length === 0)
+    return null;
+  if (String(type) !== type || !isGuestSessionEventType(type))
+    return null;
+  if (!Number.isFinite(at))
+    return null;
+  if (Object(session) !== session || session === undefined)
+    return null;
+  const sessionId = session.id;
+  if (String(sessionId) !== sessionId || sessionId.length === 0)
+    return null;
+  const parentId = session.parentId;
+  if (parentId !== null && (String(parentId) !== parentId || parentId.length === 0))
+    return null;
+  if (Object(project) !== project || project === undefined)
+    return null;
+  const directory = project.directory;
+  if (directory !== null && (String(directory) !== directory || directory.length === 0))
+    return null;
+  if (!Array.isArray(linked))
+    return null;
+  const request = {
+    v: SESSION_EVENTS_WIRE_VERSION,
+    requestId,
+    event: { id, type, at: Number(at), session: { id: sessionId, parentId }, project: { directory }, linked }
+  };
+  if (permission !== undefined) {
+    if (Object(permission) !== permission)
+      return null;
+    const permissionRequestId = permission.requestId;
+    if (String(permissionRequestId) !== permissionRequestId || permissionRequestId.length === 0)
+      return null;
+    request.event.permission = { requestId: permissionRequestId };
+  }
+  if (question !== undefined) {
+    if (Object(question) !== question)
+      return null;
+    const { kind, id: questionId } = question;
+    if (kind !== "form" && kind !== "page")
+      return null;
+    if (String(questionId) !== questionId || questionId.length === 0)
+      return null;
+    request.event.question = { kind, id: questionId };
+  }
+  if (content !== undefined) {
+    if (Object(content) !== content || content.type !== type)
+      return null;
+    request.content = content;
+  }
+  return request;
+};
 // node_modules/@openchamber/sdk/dist/service-host.js
 var SERVICE_SCHEDULE_IDLE_MS = 10 * 60000;
 var MENTIONS_IDLE_MS = 10 * 60000;
@@ -596,6 +669,31 @@ if (!port || !serviceToken) {
   process.exit(1);
 }
 var outbound = createTrackerOutbound({ env: process.env });
+var serviceDataDir = process.env.OPENCHAMBER_SERVICE_DATA_DIR?.trim() || null;
+var sessionScopeFile = serviceDataDir ? join(serviceDataDir, "session-scope.json") : null;
+var latestSessionDirectory = null;
+var readSessionScope = () => {
+  if (!sessionScopeFile)
+    return;
+  try {
+    const stored = JSON.parse(readFileSync(sessionScopeFile, "utf8"));
+    if (typeof stored.directory === "string" && isAbsolute(stored.directory)) {
+      latestSessionDirectory = stored.directory;
+    }
+  } catch {}
+};
+var saveSessionScope = (directory) => {
+  latestSessionDirectory = directory;
+  if (!sessionScopeFile)
+    return;
+  try {
+    mkdirSync(serviceDataDir, { recursive: true });
+    writeFileSync(sessionScopeFile, JSON.stringify({ directory }));
+  } catch (error) {
+    console.error(`[youtrack] could not save the session folder: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+readSessionScope();
 var PAGE_SIZE = 40;
 var cacheKey = (call, ...parts) => [call.instance, call.accountId, ...parts].join("\x00");
 
@@ -722,45 +820,64 @@ var containerFilterQuery = async (call, containerId) => {
   }
   throw new CallError(`Unknown YouTrack project ${containerId}.`, 404);
 };
-var GIT_REMOTE_TTL_MS = 5 * 60000;
+var GIT_ANSWER_TTL_MS = 5 * 60000;
+var runGit = (directory, args) => new Promise((resolve, reject) => {
+  execFile("git", ["-C", directory, ...args], { timeout: 3000, maxBuffer: 64 * 1024 }, (error, stdout) => {
+    if (error)
+      reject(error);
+    else
+      resolve(String(stdout).trim());
+  });
+});
 var GIT_REMOTE_CACHE = new Map;
 var gitIdentityOf = async (directory) => {
   if (!directory || !isAbsolute(directory) || directory.includes("\x00"))
     return null;
   const cached = GIT_REMOTE_CACHE.get(directory);
-  if (cached && Date.now() - cached.at < GIT_REMOTE_TTL_MS)
+  if (cached && Date.now() - cached.at < GIT_ANSWER_TTL_MS)
     return cached.value;
-  const runGit = (args) => new Promise((resolve, reject) => {
-    execFile("git", ["-C", directory, ...args], { timeout: 3000, maxBuffer: 64 * 1024 }, (error, stdout) => {
-      if (error)
-        reject(error);
-      else
-        resolve(String(stdout).trim());
-    });
-  });
   let remote = "";
   try {
-    remote = await runGit(["remote", "get-url", "origin"]);
+    remote = await runGit(directory, ["remote", "get-url", "origin"]);
   } catch {}
   if (!remote) {
     try {
-      const names = (await runGit(["remote"])).split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
+      const names = (await runGit(directory, ["remote"])).split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
       if (names[0])
-        remote = await runGit(["remote", "get-url", names[0]]);
+        remote = await runGit(directory, ["remote", "get-url", names[0]]);
     } catch {}
   }
   const value = remote ? { remote, repo: repoNameOf(remote) } : null;
   GIT_REMOTE_CACHE.set(directory, { at: Date.now(), value });
   return value;
 };
+var PROJECT_ROOT_CACHE = new Map;
+var projectRootOf = async (directory) => {
+  if (!directory || !isAbsolute(directory) || directory.includes("\x00"))
+    return null;
+  const cached = PROJECT_ROOT_CACHE.get(directory);
+  if (cached && Date.now() - cached.at < GIT_ANSWER_TTL_MS)
+    return cached.value;
+  let value = null;
+  try {
+    const output = await runGit(directory, ["worktree", "list", "--porcelain"]);
+    const first = output.split(/\r?\n/).find((line) => line.startsWith("worktree "));
+    if (first)
+      value = first.slice("worktree ".length).trim() || null;
+  } catch {}
+  value ??= directory;
+  PROJECT_ROOT_CACHE.set(directory, { at: Date.now(), value });
+  return value;
+};
 var mappingHintsOf = async (directory, projectName) => {
   const hints = [];
-  const folder = directory ? basename(directory) : "";
+  const root = await projectRootOf(directory);
+  const folder = root ? basename(root) : "";
   if (folder)
     hints.push({ value: folder, source: "folder" });
   if (projectName)
     hints.push({ value: projectName, source: "name" });
-  const git = await gitIdentityOf(directory);
+  const git = await gitIdentityOf(root);
   if (git?.remote)
     hints.push({ value: git.remote, source: "repo" });
   if (git?.repo)
@@ -928,7 +1045,8 @@ var handlers = {
   "items.list": async (call, input) => {
     const skip = Math.max(0, Number(input.cursor ?? "0") || 0);
     const parts = [];
-    const directory = optionalText(input, "directory") ?? optionalText(input, "projectPath");
+    const requestedDirectory = optionalText(input, "directory") ?? optionalText(input, "projectPath") ?? latestSessionDirectory;
+    const directory = await projectRootOf(requestedDirectory);
     const projectName = optionalText(input, "projectName");
     const hints = await mappingHintsOf(directory, projectName);
     const mapping = hints.length > 0 ? await issueMappingOf(call, directory, projectName, hints) : null;
@@ -1018,7 +1136,8 @@ var handlers = {
     states: await loadStates(call, input.containerId)
   }),
   "containers.list": async (call, input) => {
-    const directory = optionalText(input, "directory") ?? optionalText(input, "projectPath");
+    const requestedDirectory = optionalText(input, "directory") ?? optionalText(input, "projectPath") ?? latestSessionDirectory;
+    const directory = await projectRootOf(requestedDirectory);
     const projectName = optionalText(input, "projectName");
     if (directory || projectName) {
       try {
@@ -1077,6 +1196,22 @@ var server = http.createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (url.pathname === "/health") {
     send(res, 200, { ok: true });
+    return;
+  }
+  if (url.pathname === SESSION_EVENTS_PATH && req.method === "POST") {
+    readBody(req).then((body) => {
+      const event = readSessionEventRequest(body);
+      if (!event) {
+        send(res, 400, { ok: false, error: "not a session event this service understands" });
+        return;
+      }
+      const directory = event.event.project.directory;
+      const topLevel = event.event.session.parentId === null;
+      if (topLevel && (event.event.type === "turn-started" || event.event.type === "session-created") && directory && isAbsolute(directory) && !directory.includes("\x00")) {
+        saveSessionScope(directory);
+      }
+      send(res, 200, { ok: true });
+    }).catch(() => send(res, 500, { ok: false, error: "could not read the event" }));
     return;
   }
   if (url.pathname !== TRACKER_PROVIDER_PATH || req.method !== "POST") {

@@ -79,11 +79,12 @@ bun run bump patch|minor|major
 - **Native project mapping** — `capabilities.projectMapping` is on. Settings →
   Integrations maps YouTrack containers to OpenChamber projects, and the
   board's container picker uses that mapping. The extension draws no panel.
-- **Native project directory** — a host that supports repository scoping
-  passes the open project's `directory` (or `projectPath`) and optionally
-  `projectName` on `items.list` / `containers.list`. The service uses that
-  folder; there is no rail panel, no `/projects` route and no panel state. The
-  stock 2.7 tracker contract does not carry the folder yet.
+- **Native project directory** — the host may pass the open project's
+  `directory` (or `projectPath`) and optionally `projectName` on `items.list` /
+  `containers.list`. When it does not, the service uses the latest top-level
+  session folder from `contributes.sessionEvents`; a worktree is resolved to
+  its main checkout. The host field wins when present. There is no rail panel,
+  no `/projects` route and no panel state.
 
 ## Conventions
 
@@ -109,6 +110,14 @@ bun run bump patch|minor|major
   that account as well as the instance. When an account is removed, the host
   simply stops calling, and the next account must not inherit the previous
   account's cache.
+- `contributes.sessionEvents` listens to `turn-started` and `session-created`,
+  ignores subagent sessions, and stores the latest top-level folder in
+  `OPENCHAMBER_SERVICE_DATA_DIR`. `items.list` uses that folder only when the
+  host did not pass one. With several projects active, the most recent turn
+  wins; the host field is the precise source.
+- A worktree is resolved to its main checkout with
+  `git worktree list --porcelain` before the folder name becomes a mapping
+  hint. The shared git remote is what actually matches the issue JSON.
 - The mapping convention is read from **issue descriptions**: the service
   searches issues for those identities, parses the matched issue's fenced
   JSON, uses that issue's project as the `items.list` scope and keeps only the

@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   OPENCHAMBER_HOST_CALLBACK_URL,
+  SESSION_EVENTS_PATH,
   SOURCE_CONTROL_OUTBOUND_METHODS,
   TRACKER_OUTBOUND_PATH,
   TRACKER_PROVIDER_PATH,
@@ -182,6 +183,23 @@ const serviceRequest = (path: string, init: RequestInit = {}) =>
       'content-type': 'application/json',
       ...(init.headers ?? {}),
     },
+  });
+
+const sessionEvent = (directory: string, parentId: string | null = null) =>
+  serviceRequest(SESSION_EVENTS_PATH, {
+    method: 'POST',
+    body: JSON.stringify({
+      v: 1,
+      requestId: `evt-${requests += 1}`,
+      event: {
+        id: `evt-${requests}`,
+        type: 'turn-started',
+        at: Date.now(),
+        session: { id: 'ses-1', parentId },
+        project: { directory },
+        linked: [],
+      },
+    }),
   });
 
 const LIST: TrackerProviderInputs['items.list'] = { state: 'open', people: 'any', priority: 'all', containerId: null };
@@ -516,5 +534,35 @@ describe('YouTrack tracker provider', () => {
     })).status).toBe(400);
     expect((await serviceRequest(TRACKER_PROVIDER_PATH, { method: 'GET' })).status).toBe(404);
     expect((await serviceRequest('/not-a-route')).status).toBe(404);
+  });
+
+  test('uses the latest top-level session worktree when the tracker call has none', async () => {
+    const mapped = startFakeYouTrack({ mappingProject: true });
+    const repoFolder = mkdtempSync(join(tmpdir(), 'openchamber-session-'));
+    const worktreeFolder = join(tmpdir(), `openchamber-worktree-${randomBytes(6).toString('hex')}`);
+
+    try {
+      execFileSync('git', ['init', repoFolder], { stdio: 'ignore' });
+      execFileSync('git', ['-C', repoFolder, 'remote', 'add', 'origin',
+        'https://github.com/acme/example.git'], { stdio: 'ignore' });
+      execFileSync('git', [
+        '-C', repoFolder,
+        '-c', 'user.name=Test',
+        '-c', 'user.email=test@example.com',
+        'commit', '--allow-empty', '-m', 'init',
+      ], { stdio: 'ignore' });
+      execFileSync('git', ['-C', repoFolder, 'worktree', 'add', '-b', 'test-branch', worktreeFolder], {
+        stdio: 'ignore',
+      });
+
+      expect((await sessionEvent(worktreeFolder)).status).toBe(200);
+      const listed = await read('items.list', LIST, mapped.origin);
+
+      expect(listed.items.map((item) => item.identifier)).toEqual(['EXAMPLE-1']);
+    } finally {
+      rmSync(worktreeFolder, { recursive: true, force: true });
+      rmSync(repoFolder, { recursive: true, force: true });
+      await mapped.close();
+    }
   });
 });

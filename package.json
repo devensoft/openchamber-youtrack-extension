@@ -46,6 +46,12 @@
           ]
         }
       },
+      "sessionEvents": {
+        "events": [
+          "turn-started",
+          "session-created"
+        ]
+      },
       "tracker": {
         "wire": 1,
         "label": "YouTrack",

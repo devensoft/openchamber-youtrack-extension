@@ -18,4 +18,5 @@ test("package.json is a valid OpenChamber manifest", async () => {
   expect(result.manifest.contributes.tracker?.label).toBe("YouTrack");
   expect(result.manifest.contributes.tracker?.capabilities.projectMapping).toBe(true);
   expect(result.manifest.contributes.service?.permissions?.exec).toContain("git");
+  expect(result.manifest.contributes.sessionEvents?.events).toEqual(["turn-started", "session-created"]);
 });

@@ -15,13 +15,16 @@
  */
 import http from 'node:http';
 import { execFile } from 'node:child_process';
-import { basename, isAbsolute } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, isAbsolute, join } from 'node:path';
 
 import {
+  SESSION_EVENTS_PATH,
   TRACKER_PROVIDER_ERROR_MESSAGE_MAX,
   TRACKER_PROVIDER_PATH,
   TrackerOutboundError,
   createTrackerOutbound,
+  readSessionEventRequest,
   readTrackerProviderRequest,
   type SourceControlJsonObject,
   type SourceControlOutboundResponse,
@@ -78,6 +81,40 @@ if (!port || !serviceToken) {
 }
 
 const outbound = createTrackerOutbound({ env: process.env });
+
+// The tracker call does not carry the OpenChamber session directory. The
+// service learns it from the latest top-level session event instead, and
+// keeps the last one in its own data folder across idle stops.
+const serviceDataDir = process.env.OPENCHAMBER_SERVICE_DATA_DIR?.trim() || null;
+const sessionScopeFile = serviceDataDir ? join(serviceDataDir, 'session-scope.json') : null;
+let latestSessionDirectory: string | null = null;
+
+const readSessionScope = (): void => {
+  if (!sessionScopeFile) return;
+  try {
+    const stored: { directory?: unknown } = JSON.parse(readFileSync(sessionScopeFile, 'utf8'));
+    if (typeof stored.directory === 'string' && isAbsolute(stored.directory)) {
+      latestSessionDirectory = stored.directory;
+    }
+  } catch {
+    // No stored scope yet, or the file is unreadable. The next event writes it.
+  }
+};
+
+const saveSessionScope = (directory: string): void => {
+  latestSessionDirectory = directory;
+  if (!sessionScopeFile) return;
+  try {
+    mkdirSync(serviceDataDir!, { recursive: true });
+    writeFileSync(sessionScopeFile, JSON.stringify({ directory }));
+  } catch (error) {
+    console.error(
+      `[youtrack] could not save the session folder: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+};
+
+readSessionScope();
 
 // ---------------------------------------------------------------------------
 // The service's calls to YouTrack.
@@ -256,8 +293,20 @@ const containerFilterQuery = async (call: Call, containerId: string): Promise<st
 // ---------------------------------------------------------------------------
 // The native project folder to the issue-description mapping.
 
-/** How long a folder's git remote is reused. */
-const GIT_REMOTE_TTL_MS = 5 * 60_000;
+/** How long a folder's git answer is reused. */
+const GIT_ANSWER_TTL_MS = 5 * 60_000;
+
+const runGit = (directory: string, args: string[]): Promise<string> => new Promise((resolve, reject) => {
+  execFile(
+    'git',
+    ['-C', directory, ...args],
+    { timeout: 3000, maxBuffer: 64 * 1024 },
+    (error, stdout) => {
+      if (error) reject(error);
+      else resolve(String(stdout).trim());
+    },
+  );
+});
 
 type GitIdentity = { remote: string; repo: string | null };
 const GIT_REMOTE_CACHE = new Map<string, { at: number; value: GitIdentity | null }>();
@@ -271,33 +320,21 @@ const GIT_REMOTE_CACHE = new Map<string, { at: number; value: GitIdentity | null
 const gitIdentityOf = async (directory: string | null): Promise<GitIdentity | null> => {
   if (!directory || !isAbsolute(directory) || directory.includes('\0')) return null;
   const cached = GIT_REMOTE_CACHE.get(directory);
-  if (cached && Date.now() - cached.at < GIT_REMOTE_TTL_MS) return cached.value;
-
-  const runGit = (args: string[]): Promise<string> => new Promise((resolve, reject) => {
-    execFile(
-      'git',
-      ['-C', directory, ...args],
-      { timeout: 3000, maxBuffer: 64 * 1024 },
-      (error, stdout) => {
-        if (error) reject(error);
-        else resolve(String(stdout).trim());
-      },
-    );
-  });
+  if (cached && Date.now() - cached.at < GIT_ANSWER_TTL_MS) return cached.value;
 
   let remote = '';
   try {
-    remote = await runGit(['remote', 'get-url', 'origin']);
+    remote = await runGit(directory, ['remote', 'get-url', 'origin']);
   } catch {
     // No origin; try the first remote below.
   }
   if (!remote) {
     try {
-      const names = (await runGit(['remote']))
+      const names = (await runGit(directory, ['remote']))
         .split(/\r?\n/)
         .map((name) => name.trim())
         .filter(Boolean);
-      if (names[0]) remote = await runGit(['remote', 'get-url', names[0]]);
+      if (names[0]) remote = await runGit(directory, ['remote', 'get-url', names[0]]);
     } catch {
       // Not a git repository, or git is unavailable.
     }
@@ -308,15 +345,41 @@ const gitIdentityOf = async (directory: string | null): Promise<GitIdentity | nu
   return value;
 };
 
+const PROJECT_ROOT_CACHE = new Map<string, { at: number; value: string | null }>();
+
+/**
+ * The main checkout of a worktree, or the repository root of a subfolder.
+ * `git worktree list --porcelain` puts the main worktree first. A folder that
+ * is not a repository answers itself, so the remote read still decides.
+ */
+const projectRootOf = async (directory: string | null): Promise<string | null> => {
+  if (!directory || !isAbsolute(directory) || directory.includes('\0')) return null;
+  const cached = PROJECT_ROOT_CACHE.get(directory);
+  if (cached && Date.now() - cached.at < GIT_ANSWER_TTL_MS) return cached.value;
+
+  let value: string | null = null;
+  try {
+    const output = await runGit(directory, ['worktree', 'list', '--porcelain']);
+    const first = output.split(/\r?\n/).find((line) => line.startsWith('worktree '));
+    if (first) value = first.slice('worktree '.length).trim() || null;
+  } catch {
+    // Not a git repository, or git is unavailable.
+  }
+  value ??= directory;
+  PROJECT_ROOT_CACHE.set(directory, { at: Date.now(), value });
+  return value;
+};
+
 const mappingHintsOf = async (
   directory: string | null,
   projectName: string | null,
 ): Promise<MappingHint[]> => {
   const hints: MappingHint[] = [];
-  const folder = directory ? basename(directory) : '';
+  const root = await projectRootOf(directory);
+  const folder = root ? basename(root) : '';
   if (folder) hints.push({ value: folder, source: 'folder' });
   if (projectName) hints.push({ value: projectName, source: 'name' });
-  const git = await gitIdentityOf(directory);
+  const git = await gitIdentityOf(root);
   if (git?.remote) hints.push({ value: git.remote, source: 'repo' });
   if (git?.repo) hints.push({ value: git.repo, source: 'repo' });
   return hints;
@@ -558,10 +621,13 @@ const handlers: Handlers = {
     const skip = Math.max(0, Number(input.cursor ?? '0') || 0);
     const parts: string[] = [];
 
-    // Native projects supply the open folder (and optionally its name). No
-    // directory means no repository mapping: the list keeps the native
-    // container/all-projects behavior.
-    const directory = optionalText(input, 'directory') ?? optionalText(input, 'projectPath');
+    // The host may pass the open folder. When it does not, the latest
+    // top-level session event supplies it. Resolve a worktree to its main
+    // checkout before using the folder name as a mapping hint.
+    const requestedDirectory = optionalText(input, 'directory')
+      ?? optionalText(input, 'projectPath')
+      ?? latestSessionDirectory;
+    const directory = await projectRootOf(requestedDirectory);
     const projectName = optionalText(input, 'projectName');
     const hints = await mappingHintsOf(directory, projectName);
     const mapping = hints.length > 0
@@ -711,9 +777,13 @@ const handlers: Handlers = {
 
   'containers.list': async (call, input) => {
     // The native mapping UI and the board both read this. A directory on the
-    // call warms the issue-description cache so the following items.list does
-    // not repeat the search; the container list itself stays complete.
-    const directory = optionalText(input, 'directory') ?? optionalText(input, 'projectPath');
+    // call, or the latest session folder, warms the issue-description cache so
+    // the following items.list does not repeat the search; the container list
+    // itself stays complete.
+    const requestedDirectory = optionalText(input, 'directory')
+      ?? optionalText(input, 'projectPath')
+      ?? latestSessionDirectory;
+    const directory = await projectRootOf(requestedDirectory);
     const projectName = optionalText(input, 'projectName');
     if (directory || projectName) {
       try {
@@ -794,6 +864,28 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
   if (url.pathname === '/health') {
     send(res, 200, { ok: true });
+    return;
+  }
+  if (url.pathname === SESSION_EVENTS_PATH && req.method === 'POST') {
+    readBody(req).then((body) => {
+      const event = readSessionEventRequest(body);
+      if (!event) {
+        send(res, 400, { ok: false, error: 'not a session event this service understands' });
+        return;
+      }
+      const directory = event.event.project.directory;
+      const topLevel = event.event.session.parentId === null;
+      if (
+        topLevel
+        && (event.event.type === 'turn-started' || event.event.type === 'session-created')
+        && directory
+        && isAbsolute(directory)
+        && !directory.includes('\0')
+      ) {
+        saveSessionScope(directory);
+      }
+      send(res, 200, { ok: true });
+    }).catch(() => send(res, 500, { ok: false, error: 'could not read the event' }));
     return;
   }
   if (url.pathname !== TRACKER_PROVIDER_PATH || req.method !== 'POST') {

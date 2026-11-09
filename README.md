@@ -8,7 +8,8 @@ rail panel and no project-selection state in the extension. Requires OpenChamber
 
 1. Open **Settings → Extensions** in OpenChamber.
 2. Add this repository's Git URL.
-3. Approve the local service, the tracker role, and the `git` command it uses.
+3. Approve the local service, the tracker role, session events, and the `git`
+   command it uses.
 4. Open **Settings → Integrations → Extension accounts → YouTrack**, enter the
    server address, and connect a permanent token with the **YouTrack** scope.
 5. Map YouTrack projects to OpenChamber projects under **Settings →
@@ -17,16 +18,23 @@ rail panel and no project-selection state in the extension. Requires OpenChamber
 
 ## Repository mapping
 
-A host that supports repository scoping passes the native project's folder
-(and optionally its project name) to the tracker. The service reads the
-folder's git remote, searches YouTrack issues for that repository, and uses the
-issue whose description carries the matching JSON as the source of truth. The
-list is scoped to that issue's YouTrack project and filtered to the issues
-whose description names the repository.
+The service reads the current project folder's git remote, searches YouTrack
+issues for that repository, and uses the issue whose description carries the
+matching JSON as the source of truth. The list is scoped to that issue's
+YouTrack project and filtered to the issues whose description names the
+repository.
 
-The stock OpenChamber 2.7 tracker contract does not carry that folder yet. On
-such a host the tracker still lists work, but cannot narrow it to a repository
-until the host passes the directory.
+The folder comes from one of two places:
+
+- The host may pass it on `items.list`. When it does, that is the precise
+  source.
+- Otherwise the service uses the most recent top-level session folder from
+  OpenChamber's session events. A worktree is resolved to its main checkout
+  first, so its shared git remote still matches. The last folder is kept in the
+  service data folder, so an idle service restart does not lose it.
+
+With several projects active at once, the most recently started top-level turn
+wins. The host field, when available, avoids that ambiguity.
 
 Put the JSON in the description of an issue in the YouTrack project, as a
 fenced block with an optional language tag:
