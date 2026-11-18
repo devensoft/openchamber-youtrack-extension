@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   OPENCHAMBER_HOST_CALLBACK_URL,
+  SESSION_EVENTS_PATH,
   SOURCE_CONTROL_OUTBOUND_METHODS,
   TRACKER_OUTBOUND_PATH,
   TRACKER_PROVIDER_PATH,
@@ -184,6 +185,23 @@ const serviceRequest = (path: string, init: RequestInit = {}) =>
     },
   });
 
+const sessionEvent = (directory: string, parentId: string | null = null) =>
+  serviceRequest(SESSION_EVENTS_PATH, {
+    method: 'POST',
+    body: JSON.stringify({
+      v: 1,
+      requestId: `evt-${requests += 1}`,
+      event: {
+        id: `evt-${requests}`,
+        type: 'turn-started',
+        at: Date.now(),
+        session: { id: 'ses-1', parentId },
+        project: { directory },
+        linked: [],
+      },
+    }),
+  });
+
 const LIST: TrackerProviderInputs['items.list'] = { state: 'open', people: 'any', priority: 'all', containerId: null };
 
 describe('YouTrack tracker provider', () => {
@@ -193,17 +211,6 @@ describe('YouTrack tracker provider', () => {
     const verified = await read('auth.verify', {});
     expect(verified.account).toMatchObject({ id: 'u-1', login: 'mona', name: 'Mona Teapot' });
     expect(verified.account.avatarUrl).toBe(`${tracker.origin}/hub/api/rest/avatar/mona?s=48`);
-
-    // Verifying the account also fills the panel's project cache, so the panel
-    // does not wait for the first board call.
-    const panel = await (await serviceRequest('/projects')).json() as {
-      mode: string;
-      projects: Array<{ id: string }>;
-      needsLoad: boolean;
-    };
-    expect(panel.mode).toBe('all');
-    expect(panel.needsLoad).toBe(false);
-    expect(panel.projects.length).toBeGreaterThan(0);
 
     const refused = await call('auth.verify', { token: 'wrong' });
     expect(refused).toMatchObject({ ok: false, error: { status: 401 } });
@@ -220,237 +227,55 @@ describe('YouTrack tracker provider', () => {
     expect(containers.map((container) => container.key)).toEqual(expect.arrayContaining(['PROJ', 'OPS']));
   });
 
-  test('selects projects through the panel service', async () => {
-    await read('containers.list', {});
+  test('keeps the project cache per account', async () => {
+    await read('items.list', LIST);
+    const before = tracker.projectReads;
 
-    const before = await (await serviceRequest('/projects')).json() as {
-      instance: string | null;
-      projects: Array<{ id: string; access: string }>;
-      mode: string;
-      selected: string[];
-      user: { id: string; login: string | null } | null;
-      needsLoad: boolean;
-    };
-    expect(before.instance).toBe(tracker.origin);
-    expect(before.projects.map((project) => project.id)).toEqual(expect.arrayContaining(['p-proj', 'p-ops']));
-    expect(before.projects.find((project) => project.id === 'p-proj')?.access).toBe('edit');
-    expect(before.projects.find((project) => project.id === 'p-ops')?.access).toBe('read');
-    expect(before.user).toMatchObject({ id: 'u-1', login: 'mona' });
-    expect(before.mode).toBe('all');
-    expect(before.selected).toEqual([]);
-    expect(before.needsLoad).toBe(false);
-
-    const saved = await serviceRequest('/projects', {
-      method: 'PUT',
-      body: JSON.stringify({ instance: before.instance, mode: 'selected', selected: ['p-proj'] }),
+    await call('items.list', {
+      token: 'demo',
+      account: { id: 'u-2', login: 'second' },
+      input: LIST,
     });
-    expect(saved.status).toBe(200);
-    expect(await saved.json()).toMatchObject({ mode: 'selected', selected: ['p-proj'] });
 
-    const { containers } = await read('containers.list', {});
-    expect(containers.map((container) => container.key)).toEqual(['PROJ']);
-
-    const list = await read('items.list', LIST);
-    expect(list.items.every((item) => item.container?.key === 'PROJ')).toBe(true);
-    expect(list.items.map((item) => item.identifier)).toEqual(['PROJ-1', 'PROJ-2']);
-
-    const explicit = await read('items.list', { ...LIST, containerId: 'p-ops' });
-    expect(explicit.items.map((item) => item.identifier)).toEqual(['OPS-1']);
-
-    const file = join(home, '.config', 'openchamber', 'youtrack-extension-projects.json');
-    const persisted = JSON.parse(readFileSync(file, 'utf8')) as {
-      modeByInstance: Record<string, string>;
-      selectedByInstance: Record<string, string[]>;
-    };
-    expect(persisted.modeByInstance[tracker.origin]).toBe('selected');
-    expect(persisted.selectedByInstance[tracker.origin]).toEqual(['p-proj']);
-
-    // Show all is a visibility switch: the picked project stays selected so
-    // the panel, and switching back, keep it.
-    const showAll = await serviceRequest('/projects', {
-      method: 'PUT',
-      body: JSON.stringify({ instance: before.instance, mode: 'all', selected: ['p-proj'] }),
-    });
-    expect(showAll.status).toBe(200);
-    expect(await showAll.json()).toMatchObject({ mode: 'all', selected: ['p-proj'] });
-
-    const panel = await (await serviceRequest('/projects')).json() as {
-      mode: string;
-      selected: string[];
-    };
-    expect(panel).toMatchObject({ mode: 'all', selected: ['p-proj'] });
-
-    const shownAll = await read('containers.list', {});
-    expect(shownAll.containers.map((container) => container.key)).toEqual(
-      expect.arrayContaining(['PROJ', 'OPS']),
-    );
-    // The unscoped list (what the composer picker asks for) follows the mode.
-    const unscoped = await read('items.list', LIST);
-    expect(unscoped.items.map((item) => item.identifier)).toEqual(['PROJ-1', 'PROJ-2', 'OPS-1']);
-
-    const kept = JSON.parse(readFileSync(file, 'utf8')) as {
-      modeByInstance: Record<string, string>;
-      selectedByInstance: Record<string, string[]>;
-    };
-    expect(kept.modeByInstance[tracker.origin]).toBe('all');
-    expect(kept.selectedByInstance[tracker.origin]).toEqual(['p-proj']);
-
-    // Switching back restores only the saved project, with no restart and no
-    // separate call to reload the containers.
-    const showSelected = await serviceRequest('/projects', {
-      method: 'PUT',
-      body: JSON.stringify({ instance: before.instance, mode: 'selected', selected: ['p-proj'] }),
-    });
-    expect(showSelected.status).toBe(200);
-    const restored = await read('containers.list', {});
-    expect(restored.containers.map((container) => container.key)).toEqual(['PROJ']);
-    const scoped = await read('items.list', LIST);
-    expect(scoped.items.map((item) => item.identifier)).toEqual(['PROJ-1', 'PROJ-2']);
-
-    const emptySelection = await serviceRequest('/projects', {
-      method: 'PUT',
-      body: JSON.stringify({ instance: before.instance, mode: 'selected', selected: [] }),
-    });
-    expect(emptySelection.status).toBe(400);
-
-    const reset = await serviceRequest('/projects', {
-      method: 'PUT',
-      body: JSON.stringify({ instance: before.instance, mode: 'all', selected: [] }),
-    });
-    expect(reset.status).toBe(200);
-    expect(await reset.json()).toMatchObject({ mode: 'all', selected: [] });
-
-    const all = await read('containers.list', {});
-    expect(all.containers.length).toBeGreaterThan(1);
+    expect(tracker.projectReads).toBe(before + 1);
   });
 
-  test('hides the cached project list when the host account is disconnected', async () => {
-    const accountPath = join(home, '.config', 'openchamber', 'tracker-accounts.json');
-    const selection = await serviceRequest('/projects', {
-      method: 'PUT',
-      body: JSON.stringify({ instance: tracker.origin, mode: 'selected', selected: ['p-proj'] }),
-    });
-    expect(selection.status).toBe(200);
-
-    writeFileSync(accountPath, JSON.stringify({
-      trackers: {
-        'ext-youtrack': { instance: tracker.origin, activeAccountId: null, accounts: [] },
-      },
-    }));
-    const offline = await (await serviceRequest('/projects')).json() as {
-      connected: boolean;
-      instance: string | null;
-      projects: unknown[];
-      selected: string[];
-      needsLoad: boolean;
-    };
-    expect(offline.connected).toBe(false);
-    expect(offline.instance).toBeNull();
-    expect(offline.projects).toEqual([]);
-    expect(offline.selected).toEqual(['p-proj']);
-    expect(offline.needsLoad).toBe(true);
-
-    writeFileSync(accountPath, JSON.stringify({
-      trackers: {
-        'ext-youtrack': {
-          instance: tracker.origin,
-          activeAccountId: 'u-1',
-          accounts: [{ id: 'u-1', status: 'valid' }],
-        },
-      },
-    }));
-    const back = await (await serviceRequest('/projects')).json() as {
-      connected: boolean;
-      instance: string | null;
-      projects: Array<{ id: string }>;
-      selected: string[];
-      needsLoad: boolean;
-    };
-    expect(back.connected).toBe(true);
-    expect(back.instance).toBe(tracker.origin);
-    expect(back.projects.map((project) => project.id)).toEqual(
-      expect.arrayContaining(['p-proj', 'p-ops']),
-    );
-    expect(back.selected).toEqual(['p-proj']);
-    expect(back.needsLoad).toBe(false);
-
-    // An unreadable store is `unknown`, not disconnected: keep the cache.
-    writeFileSync(accountPath, '{ not json');
-    const unknown = await (await serviceRequest('/projects')).json() as {
-      connected: boolean;
-      projects: Array<{ id: string }>;
-    };
-    expect(unknown.connected).toBe(true);
-    expect(unknown.projects.map((project) => project.id)).toEqual(
-      expect.arrayContaining(['p-proj', 'p-ops']),
-    );
-
-    rmSync(accountPath, { force: true });
-    const reset = await serviceRequest('/projects', {
-      method: 'PUT',
-      body: JSON.stringify({ instance: tracker.origin, mode: 'all', selected: [] }),
-    });
-    expect(reset.status).toBe(200);
-  });
-
-  test('restores the saved mode and selection when the service starts', async () => {
-    const restartHome = mkdtempSync(join(tmpdir(), 'youtrack-provider-restart-'));
-    const configDir = join(restartHome, '.config', 'openchamber');
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(
-      join(configDir, 'youtrack-extension-projects.json'),
-      JSON.stringify({
-        modeByInstance: { 'https://youtrack.example.com': 'selected' },
-        selectedByInstance: { 'https://youtrack.example.com': ['p-proj'] },
-        knownProjects: {
-          'https://youtrack.example.com': [
-            { id: 'p-proj', key: 'PROJ', name: 'Project' },
-            { id: 'p-ops', key: 'OPS', name: 'Operations' },
-          ],
-        },
-        lastInstance: 'https://youtrack.example.com',
-      }),
-    );
-
-    const restartPort = await freePort();
-    const restartToken = randomBytes(16).toString('hex');
-    const restarted = spawn('node', [serviceEntry], {
-      env: {
-        PATH: process.env.PATH,
-        HOME: restartHome,
-        OPENCHAMBER_SERVICE_PORT: String(restartPort),
-        OPENCHAMBER_SERVICE_TOKEN: restartToken,
-        [OPENCHAMBER_HOST_CALLBACK_URL]: `http://127.0.0.1:${callback.port}`,
-      },
-      stdio: 'ignore',
-    });
+  test('scopes an items list to the issue JSON of the open folder', async () => {
+    const mapped = startFakeYouTrack({ mappingProject: true });
+    const gitFolder = mkdtempSync(join(tmpdir(), 'openchamber-git-'));
 
     try {
-      let ready = false;
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        ready = await fetch(`http://127.0.0.1:${restartPort}/health`, {
-          headers: { authorization: `Bearer ${restartToken}` },
-        }).then((response) => response.ok).catch(() => false);
-        if (ready) break;
-        await Bun.sleep(50);
-      }
-      expect(ready).toBe(true);
+      execFileSync('git', ['init', gitFolder], { stdio: 'ignore' });
+      execFileSync('git', ['-C', gitFolder, 'remote', 'add', 'origin',
+        'https://github.com/acme/example.git'], { stdio: 'ignore' });
 
-      const answer = await fetch(`http://127.0.0.1:${restartPort}/projects`, {
-        headers: { authorization: `Bearer ${restartToken}` },
-      }).then((response) => response.json()) as {
-        mode: string;
-        selected: string[];
-        needsLoad: boolean;
-        projects: Array<{ id: string }>;
-      };
-      expect(answer.mode).toBe('selected');
-      expect(answer.selected).toEqual(['p-proj']);
-      expect(answer.needsLoad).toBe(false);
-      expect(answer.projects.map((project) => project.id)).toEqual(['p-proj', 'p-ops']);
+      const input = {
+        ...LIST,
+        directory: gitFolder,
+        projectName: 'example',
+      } as TrackerProviderInputs['items.list'];
+
+      const listed = await read('items.list', input, mapped.origin);
+      expect(listed.items.map((item) => item.identifier)).toEqual(['EXAMPLE-1']);
+
+      // An explicit container read is not narrowed by the repository filter.
+      const explicit = await read('items.list', { ...input, containerId: 'p-example' }, mapped.origin);
+      expect(explicit.items.map((item) => item.identifier)).toEqual(['EXAMPLE-1', 'EXAMPLE-2']);
+
+      // The native project mapping still sees every container; only the list
+      // is scoped to the issue whose description names the repository.
+      const { containers } = await read('containers.list', {}, mapped.origin);
+      expect(containers.map((container) => container.key))
+        .toEqual(expect.arrayContaining(['PROJ', 'OPS', 'EXAMPLE']));
+
+      // Without the native directory the list keeps the native all-projects
+      // behavior: EXAMPLE-2 is no longer excluded.
+      const native = await read('items.list', LIST, mapped.origin);
+      expect(native.items.map((item) => item.identifier))
+        .toEqual(expect.arrayContaining(['PROJ-1', 'PROJ-2', 'OPS-1', 'EXAMPLE-2']));
     } finally {
-      restarted.kill();
-      rmSync(restartHome, { recursive: true, force: true });
+      rmSync(gitFolder, { recursive: true, force: true });
+      await mapped.close();
     }
   });
 
@@ -482,6 +307,13 @@ describe('YouTrack tracker provider', () => {
       'PROJ-2',
       'OPS-1',
     ]);
+    expect((await read('items.list', { ...LIST, state: 'todo' })).items.map((item) => item.identifier)).toEqual([
+      'PROJ-1',
+      'OPS-1',
+    ]);
+    expect((await read('items.list', { ...LIST, state: 'in-progress' })).items.map((item) => item.identifier)).toEqual([
+      'PROJ-2',
+    ]);
     expect((await read('items.list', { ...LIST, state: 'done' })).items.map((item) => item.identifier)).toEqual(['PROJ-3']);
     expect(
       (await read('items.list', { ...LIST, state: 'in-progress', containerId: 'p-proj' })).items.map((item) => item.identifier),
@@ -496,6 +328,16 @@ describe('YouTrack tracker provider', () => {
     expect((await read('items.list', { ...LIST, state: 'all', query: 'CSV' })).items.map((item) => item.identifier)).toEqual([
       'PROJ-2',
     ]);
+  });
+
+  test('uses common state names above the large-project cap', async () => {
+    const many = startFakeYouTrack({ generatedProjects: 39 });
+    try {
+      const listed = await read('items.list', { ...LIST, state: 'todo' }, many.origin);
+      expect(listed.items.map((item) => item.identifier)).toEqual(['PROJ-1', 'OPS-1']);
+    } finally {
+      await many.close();
+    }
   });
 
   test('builds a neutral item with state, priority, labels, assignee, container and comments', async () => {
@@ -661,6 +503,26 @@ describe('YouTrack tracker provider', () => {
     });
   });
 
+  test('reads one project directly when the list leaves it out', async () => {
+    const hidden = startFakeYouTrack({ omitProjectFromList: 'p-proj' });
+    try {
+      const listed = await read('items.list', { ...LIST, containerId: 'p-proj' }, hidden.origin);
+      expect(listed.items.map((item) => item.identifier)).toEqual(['PROJ-1', 'PROJ-2']);
+    } finally {
+      await hidden.close();
+    }
+  });
+
+  test('keeps the list unscopeable when the project list fails', async () => {
+    const failing = startFakeYouTrack({ projectsStatus: 500 });
+    try {
+      const listed = await read('items.list', LIST, failing.origin);
+      expect(listed.items.map((item) => item.identifier)).toEqual(['PROJ-1', 'PROJ-2', 'OPS-1']);
+    } finally {
+      await failing.close();
+    }
+  });
+
   test('answers null for a comment on an unknown issue', async () => {
     expect(await read('comments.create', { identifier: 'PROJ-404', body: 'nothing to attach to' }))
       .toEqual({ comment: null });
@@ -696,40 +558,6 @@ describe('YouTrack tracker provider', () => {
     }
   });
 
-  test('infers access from the project team and the leader', async () => {
-    const access = startFakeYouTrack({ withTeamlessProject: true, everyoneGroup: true });
-    try {
-      // The account store can name a different instance; clear it so this
-      // fresh origin is the one the panel answers about.
-      rmSync(join(home, '.config', 'openchamber', 'tracker-accounts.json'), { force: true });
-
-      await read('auth.verify', {}, access.origin);
-      const panel = await (await serviceRequest('/projects')).json() as {
-        instance: string | null;
-        projects: Array<{ id: string; access: string }>;
-      };
-      expect(panel.instance).toBe(access.origin);
-      const accessOf = (id: string) => panel.projects.find((project) => project.id === id)?.access;
-      expect(accessOf('p-proj')).toBe('edit'); // leader
-      expect(accessOf('p-ops')).toBe('edit'); // the everyone group
-      expect(accessOf('p-mystery')).toBe('unknown'); // no team data
-    } finally {
-      // Leave the tracker origin as the panel's last instance again.
-      await read('containers.list', {});
-      await access.close();
-    }
-  });
-
-  test('verifies the account even when the project preload fails', async () => {
-    const offline = startFakeYouTrack({ projectsStatus: 500 });
-    try {
-      const verified = await read('auth.verify', {}, offline.origin);
-      expect(verified.account).toMatchObject({ id: 'u-1', login: 'mona' });
-    } finally {
-      await offline.close();
-    }
-  });
-
   test('refuses an unauthenticated or malformed service request', async () => {
     const serviceUrl = `http://127.0.0.1:${servicePort}`;
 
@@ -737,18 +565,45 @@ describe('YouTrack tracker provider', () => {
     expect(await fetch(`${serviceUrl}/health`, {
       headers: { authorization: `Bearer ${serviceToken}` },
     }).then((response) => response.status)).toBe(200);
-    expect((await fetch(`${serviceUrl}/projects`, {
+    expect((await fetch(`${serviceUrl}/health`, {
       headers: { authorization: 'Bearer not-the-service-token' },
     })).status).toBe(401);
 
-    // Not a selection body, so nothing is stored.
-    expect((await serviceRequest('/projects', { method: 'PUT', body: '{' })).status).toBe(400);
-    expect((await serviceRequest('/projects', { method: 'POST', body: '{}' })).status).toBe(405);
     expect((await serviceRequest(TRACKER_PROVIDER_PATH, {
       method: 'POST',
       body: JSON.stringify({ v: 1 }),
     })).status).toBe(400);
     expect((await serviceRequest(TRACKER_PROVIDER_PATH, { method: 'GET' })).status).toBe(404);
     expect((await serviceRequest('/not-a-route')).status).toBe(404);
+  });
+
+  test('uses the latest top-level session worktree when the tracker call has none', async () => {
+    const mapped = startFakeYouTrack({ mappingProject: true });
+    const repoFolder = mkdtempSync(join(tmpdir(), 'openchamber-session-'));
+    const worktreeFolder = join(tmpdir(), `openchamber-worktree-${randomBytes(6).toString('hex')}`);
+
+    try {
+      execFileSync('git', ['init', repoFolder], { stdio: 'ignore' });
+      execFileSync('git', ['-C', repoFolder, 'remote', 'add', 'origin',
+        'https://github.com/acme/example.git'], { stdio: 'ignore' });
+      execFileSync('git', [
+        '-C', repoFolder,
+        '-c', 'user.name=Test',
+        '-c', 'user.email=test@example.com',
+        'commit', '--allow-empty', '-m', 'init',
+      ], { stdio: 'ignore' });
+      execFileSync('git', ['-C', repoFolder, 'worktree', 'add', '-b', 'test-branch', worktreeFolder], {
+        stdio: 'ignore',
+      });
+
+      expect((await sessionEvent(worktreeFolder)).status).toBe(200);
+      const listed = await read('items.list', LIST, mapped.origin);
+
+      expect(listed.items.map((item) => item.identifier)).toEqual(['EXAMPLE-1']);
+    } finally {
+      rmSync(worktreeFolder, { recursive: true, force: true });
+      rmSync(repoFolder, { recursive: true, force: true });
+      await mapped.close();
+    }
   });
 });

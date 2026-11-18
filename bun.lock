@@ -5,7 +5,7 @@
     "": {
       "name": "openchamber-youtrack-extension",
       "dependencies": {
-        "@openchamber/sdk": "2.6.1",
+        "@openchamber/sdk": "2.7.0",
       },
       "devDependencies": {
         "@types/bun": "^1.4.4",
@@ -15,7 +15,7 @@
     },
   },
   "packages": {
-    "@openchamber/sdk": ["@openchamber/sdk@2.6.1", "", { "dependencies": { "zod": "^4.3.6" }, "bin": { "openchamber-guest-bundle": "scripts/bundle-guest.ts" } }, "sha512-Z/TgwxbyXOHzYrWD0rMQ+/kPDZb5wacrXWdkHXmdQP+PsTDpCKP//955QkfmSJW6lVowBOlnVw7l5RA22Dg1pA=="],
+    "@openchamber/sdk": ["@openchamber/sdk@2.7.0", "", { "dependencies": { "zod": "^4.3.6" }, "bin": { "openchamber-guest-check": "scripts/check-guest.ts", "openchamber-guest-bundle": "scripts/bundle-guest.ts" } }, "sha512-dYrQad76cm1YMOs9GEgX7f9pxzqozPQUmtsmqGUNdKADqhaWRg9vIHJiM5JptZgpmim0uwD8C/+Sz+5tRpZv/g=="],
 
     "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
 

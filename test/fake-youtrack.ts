@@ -45,7 +45,7 @@ export type FakeIssueSpec = {
   description?: string;
   state?: string;
   priority?: string;
-  project?: 'p-proj' | 'p-ops';
+  project?: 'p-proj' | 'p-ops' | 'p-example';
   assignee?: { login: string; fullName: string } | null;
   reporter?: { login: string; fullName: string } | null;
 };
@@ -62,12 +62,18 @@ export type FakeYouTrackOptions = {
   extraIssues?: FakeIssueSpec[];
   /** `GENERATED-n` issues in PROJ, for paging. */
   generatedIssues?: number;
+  /** Extra projects, to exercise the large-project state fallback. */
+  generatedProjects?: number;
   /** Override `/api/config`, the probe's answer. */
   config?: { status?: number; body: string };
   /** The project-list endpoint answers this status instead. */
   projectsStatus?: number;
+  /** Leave one project out of the list while the direct project read still answers it. */
+  omitProjectFromList?: string;
   /** Add a project with no team data, so its access is unknown. */
   withTeamlessProject?: boolean;
+  /** Add EXAMPLE with the folder-mapping JSON in its description. */
+  mappingProject?: boolean;
   /** Make OPS visible to everyone, so the account can edit it. */
   everyoneGroup?: boolean;
 };
@@ -143,10 +149,27 @@ const baseProjects = (options: FakeYouTrackOptions): FakeProject[] => {
       states: STATES.map(clone),
     });
   }
+  if (options.mappingProject) {
+    projects.push({
+      id: 'p-example',
+      name: 'Example Project',
+      shortName: 'EXAMPLE',
+      states: STATES.map(clone),
+    });
+  }
+  for (let index = 1; index <= (options.generatedProjects ?? 0); index += 1) {
+    projects.push({
+      id: `p-gen-${index}`,
+      name: `Generated ${index}`,
+      shortName: `GEN${index}`,
+      states: STATES.map(clone),
+      team: { users: [], allUsersGroup: true },
+    });
+  }
   return projects;
 };
 
-const baseIssues = (): FakeIssue[] => [
+const baseIssues = (options: FakeYouTrackOptions): FakeIssue[] => [
   makeIssue(
     '2-1',
     'PROJ-1',
@@ -172,6 +195,40 @@ const baseIssues = (): FakeIssue[] => [
   makeIssue('3-1', 'OPS-1', 'Rotate the deploy key', 'Quarterly rotation.', 'Open', 'Critical', {
     type: 'Task',
   }),
+  ...(options.mappingProject
+    ? [
+        makeIssue(
+          '4-1',
+          'EXAMPLE-1',
+          'Folder mapping metadata',
+          [
+            'Folder mapping metadata:',
+            '',
+            '```json',
+            '{',
+            '  "repoUrl": "https://github.com/acme/example.git",',
+            '  "ocProjectName": "example",',
+            '  "ignoredField": "ignored"',
+            '}',
+            '```',
+          ].join('\n'),
+          'Open',
+          'Normal',
+          { projectId: 'p-example' },
+        ),
+        // Same project, no mapping metadata: it must not leak into the
+        // repository's item picker.
+        makeIssue(
+          '4-2',
+          'EXAMPLE-2',
+          'No mapping metadata',
+          'An ordinary issue in the same project.',
+          'Open',
+          'Normal',
+          { projectId: 'p-example' },
+        ),
+      ]
+    : []),
 ];
 
 const issueFromSpec = (spec: FakeIssueSpec, index: number): FakeIssue => {
@@ -215,17 +272,20 @@ export type FakeYouTrack = {
   projects: FakeProject[];
   /** Every query string the provider sent to the command API. */
   commandQueries: string[];
+  /** How many times the provider read the whole project list. */
+  projectReads: number;
 };
 
 export const startFakeYouTrack = (options: FakeYouTrackOptions = {}): FakeYouTrack => {
   const token = options.token ?? 'demo';
   const projects = baseProjects(options);
   const issues = [
-    ...baseIssues(),
+    ...baseIssues(options),
     ...(options.extraIssues ?? []).map(issueFromSpec),
     ...Array.from({ length: options.generatedIssues ?? 0 }, (_, index) => generatedIssue(index + 1)),
   ];
   const commandQueries: string[] = [];
+  let projectReads = 0;
 
   const findIssue = (idOrKey: string): FakeIssue | undefined => issues.find(
     (issue) => issue.id === idOrKey || issue.idReadable.toLowerCase() === idOrKey.toLowerCase(),
@@ -351,10 +411,32 @@ export const startFakeYouTrack = (options: FakeYouTrackOptions = {}): FakeYouTra
       }
 
       if (url.pathname === '/api/admin/projects' && request.method === 'GET') {
+        projectReads += 1;
         if (options.projectsStatus) return json({ error: 'server error' }, options.projectsStatus);
         return json(
-          projects.map(({ id, name, shortName, leader, team }) => ({ id, name, shortName, leader, team })),
+          projects
+            .filter((project) => project.id !== options.omitProjectFromList)
+            .map(({ id, name, shortName, leader, team }) => ({
+              id,
+              name,
+              shortName,
+              leader,
+              team,
+            })),
         );
+      }
+
+      const directProject = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)$/);
+      if (directProject && request.method === 'GET') {
+        const project = projects.find((entry) => entry.id === directProject[1]);
+        if (!project) return json({ error: 'Not found' }, 404);
+        return json({
+          id: project.id,
+          name: project.name,
+          shortName: project.shortName,
+          leader: project.leader,
+          team: project.team,
+        });
       }
 
       const projectFields = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)\/customFields$/);
@@ -440,5 +522,6 @@ export const startFakeYouTrack = (options: FakeYouTrackOptions = {}): FakeYouTra
     issues,
     projects,
     commandQueries,
+    get projectReads() { return projectReads; },
   };
 };
